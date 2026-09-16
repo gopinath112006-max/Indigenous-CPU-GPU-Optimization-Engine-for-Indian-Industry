@@ -1,0 +1,4 @@
+name,status,objective
+qp_cross,opt,-2.5
+qp_diagonal,opt,-1.5
+qp_multicross,opt,-22.4615

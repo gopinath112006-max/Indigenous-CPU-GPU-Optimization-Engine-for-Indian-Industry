@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  CMAKE_CXX_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ libgtest-dev nlohmann-json3-dev
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHYPERNOVA_BUILD_TESTS=ON -DHYPERNOVA_BUILD_CLI=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Run tests
+        run: |
+          cd build
+          ctest --output-on-failure --parallel
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          choco install cmake gtest nlohmann-json --yes
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHYPERNOVA_BUILD_TESTS=ON -DHYPERNOVA_BUILD_CLI=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Run tests
+        run: |
+          cd build
+          ctest -C Release --output-on-failure --parallel
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Configure CMake with clang-tidy
+        run: cmake -B build -DCMAKE_CXX_CLANG_TIDY=clang-tidy
+
+      - name: Build and analyze
+        run: cmake --build build --config Release --parallel
+
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        run: |
+          find . -name "*.hpp" -o -name "*.cpp" | xargs clang-format --dry-run --Werror
+
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+
+      - name: Generate documentation
+        run: |
+          doxygen docs/Doxyfile 2>&1 | tail -20

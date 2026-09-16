@@ -1,0 +1,3 @@
+name,status,objective
+miqp_portfolio,opt,-7.75
+miqp_equality,opt,-1.5
