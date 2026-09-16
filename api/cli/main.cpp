@@ -1,4 +1,5 @@
 #include <hypernova/api.hpp>
+#include <execution/gpu_backend.hpp>
 #include "benchmark_runner.hpp"
 #include <iostream>
 #include <fstream>
@@ -6,6 +7,8 @@
 #include <vector>
 #include <chrono>
 #include <iomanip>
+#include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include "interactive/InteractiveSession.hpp"
 
@@ -18,6 +21,7 @@ void print_usage(const char* prog) {
     std::cout << "  iis <model.mps|model.lp>      Find an irreducible infeasible subsystem\n";
     std::cout << "  diagnose <model.mps|model.lp> Verify certificates for infeasible/unbounded models\n";
     std::cout << "  quality <model.mps|model.lp>   Numerical diagnostics report (use --json for JSON)\n";
+    std::cout << "  capabilities                  Show solver capabilities and compute backends\n";
     std::cout << "  interactive                   Build problem interactively\n";
     std::cout << "  convert <input> --to <mps|lp> Convert between file formats\n";
     std::cout << "  inspect <model.mps|model.lp>  Inspect problem structure\n";
@@ -36,8 +40,8 @@ void print_usage(const char* prog) {
     std::cout << "                                B&B node-ordering strategy (default: hybrid)\n";
     std::cout << "  --branching <most-fractional|pseudocost|strong|reliability>\n";
     std::cout << "                                B&B branching strategy (default: reliability)\n";
-    std::cout << "  --out <file>                  Output solution file\n";
-    std::cout << "  --report <file>               Output solve report JSON\n\n";
+    std::cout << "  --out <file>                  Write solution file (JSON .sol)\n";
+    std::cout << "  --report <file>               Write solve report (JSON)\n\n";
     std::cout << "Interactive options:\n";
     std::cout << "  --resume <session.json>       Resume from saved session\n";
     std::cout << "  --save-session <file>         Save session after completion\n";
@@ -50,6 +54,129 @@ void print_usage(const char* prog) {
     std::cout << "  --advanced                    Enable QP/SOS prompts\n";
 }
 
+namespace {
+
+bool ends_with_ci(const std::string& s, const std::string& suffix) {
+    if (suffix.size() > s.size()) return false;
+    return std::equal(suffix.rbegin(), suffix.rend(), s.rbegin(),
+                      [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                      });
+}
+
+Problem load_problem(const std::string& path) {
+    if (ends_with_ci(path, ".mps")) return Problem::from_mps(path);
+    return Problem::from_lp(path);
+}
+
+std::string status_label(model::ProblemStatus s) {
+    switch (s) {
+        case model::ProblemStatus::OPTIMAL:        return "OPTIMAL";
+        case model::ProblemStatus::INFEASIBLE:     return "INFEASIBLE";
+        case model::ProblemStatus::UNBOUNDED:      return "UNBOUNDED";
+        case model::ProblemStatus::SUBOPTIMAL:     return "SUBOPTIMAL";
+        case model::ProblemStatus::TIME_LIMIT:     return "TIME_LIMIT";
+        case model::ProblemStatus::ITER_LIMIT:     return "ITER_LIMIT";
+        case model::ProblemStatus::NUMERICAL_ERROR:return "NUMERICAL_ERROR";
+        case model::ProblemStatus::INTERRUPTED:    return "INTERRUPTED";
+        default:                                   return "UNKNOWN";
+    }
+}
+
+model::Solution to_model_solution(const Solution& s) {
+    model::Solution m;
+    m.status = s.status;
+    m.objective_value = s.objective_value;
+    m.best_bound = s.best_bound;
+    m.gap = s.gap;
+    m.primal = s.primal;
+    m.dual = s.dual;
+    m.reduced_costs = s.reduced_costs;
+    m.basis_status = s.basis_status;
+    m.simplex_iterations = s.simplex_iterations;
+    m.ipm_iterations = s.ipm_iterations;
+    m.bb_nodes = s.bb_nodes;
+    m.solve_time_ms = s.solve_time_ms;
+    return m;
+}
+
+void write_solution_file(const std::string& path, const Problem& problem, const Solution& solution) {
+    nlohmann::json j;
+    j["problem"] = problem.name;
+    j["status"] = status_label(solution.status);
+    j["objective_value"] = solution.objective_value;
+    j["best_bound"] = solution.best_bound;
+    j["gap"] = solution.gap;
+    j["solve_time_ms"] = solution.solve_time_ms;
+    auto& vars = j["variables"] = nlohmann::json::array();
+    for (std::size_t i = 0; i < solution.primal.size() && i < problem.variables.size(); ++i) {
+        vars.push_back({
+            {"name", problem.variables[i].name},
+            {"index", i},
+            {"value", solution.primal[i]}
+        });
+    }
+    if (!solution.dual.empty()) {
+        auto& cons = j["constraints"] = nlohmann::json::array();
+        for (std::size_t i = 0; i < solution.dual.size() && i < problem.constraints.size(); ++i) {
+            cons.push_back({
+                {"name", problem.constraints[i].name},
+                {"index", i},
+                {"dual", solution.dual[i]}
+            });
+        }
+    }
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        throw std::runtime_error("cannot open output file: " + path);
+    }
+    out << j.dump(2) << "\n";
+}
+
+nlohmann::json solve_report_json(const Problem& problem, const Solution& solution,
+                                 double wall_ms,
+                                 const validation::VerificationResult& verification) {
+    nlohmann::json j;
+    j["problem_name"] = problem.name;
+    j["solver_version"] = "0.1.0";
+    j["status"] = status_label(solution.status);
+    j["objective_value"] = solution.objective_value;
+    j["best_bound"] = solution.best_bound;
+    j["gap"] = solution.gap;
+    j["num_variables"] = problem.variables.size();
+    j["num_constraints"] = problem.constraints.size();
+    j["num_integer_vars"] = problem.num_integer_vars();
+    j["num_quadratic_terms"] = problem.quadratic_terms.size();
+    j["num_nonzeros"] = problem.constraint_matrix.nnz();
+    j["simplex_iterations"] = solution.simplex_iterations;
+    j["ipm_iterations"] = solution.ipm_iterations;
+    j["bb_nodes"] = solution.bb_nodes;
+    j["solve_time_ms"] = solution.solve_time_ms;
+    j["wall_time_ms"] = wall_ms;
+    j["verification"] = {
+        {"feasible", verification.feasible},
+        {"optimal", verification.optimal},
+        {"primal_infeasibility", verification.primal_infeasibility},
+        {"dual_infeasibility", verification.dual_infeasibility},
+        {"complementarity", verification.complementarity},
+        {"integrality_violation", verification.integrality_violation},
+        {"message", verification.message}
+    };
+    return j;
+}
+
+std::string compute_backend_name(execution::ComputeBackendType type) {
+    switch (type) {
+        case execution::ComputeBackendType::CUDA: return "cuda";
+        case execution::ComputeBackendType::HIP:  return "hip";
+        case execution::ComputeBackendType::SYCL: return "sycl";
+        default:                                  return "cpu";
+    }
+}
+
+} // namespace
+
 int cmd_solve(int argc, char** argv) {
     if (argc < 3) {
         std::cerr << "solve: missing model file\n";
@@ -58,6 +185,8 @@ int cmd_solve(int argc, char** argv) {
 
     std::string model_file = argv[2];
     SolverOptions options;
+    std::string out_file;
+    std::string report_file;
 
     for (int i = 3; i < argc; ++i) {
         std::string arg = argv[i];
@@ -101,19 +230,14 @@ int cmd_solve(int argc, char** argv) {
             else if (val == "strong") options.branching = BranchingStrategy::STRONG_BRANCHING;
             else if (val == "reliability") options.branching = BranchingStrategy::RELIABILITY;
         } else if (arg == "--out" && i + 1 < argc) {
+            out_file = argv[++i];
         } else if (arg == "--report" && i + 1 < argc) {
+            report_file = argv[++i];
         }
     }
 
     try {
-        Problem problem;
-        if (model_file.size() >= 4 &&
-            (model_file.substr(model_file.size() - 4) == ".mps" ||
-             model_file.substr(model_file.size() - 4) == ".MPS")) {
-            problem = Problem::from_mps(model_file);
-        } else {
-            problem = Problem::from_lp(model_file);
-        }
+        Problem problem = load_problem(model_file);
 
         std::cout << "Problem: " << problem.name << "\n";
         std::cout << "Variables: " << problem.variables.size() << "\n";
@@ -127,18 +251,7 @@ int cmd_solve(int argc, char** argv) {
 
         double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
 
-        std::cout << "\nStatus: ";
-        switch (solution.status) {
-            case model::ProblemStatus::OPTIMAL: std::cout << "OPTIMAL"; break;
-            case model::ProblemStatus::INFEASIBLE: std::cout << "INFEASIBLE"; break;
-            case model::ProblemStatus::UNBOUNDED: std::cout << "UNBOUNDED"; break;
-            case model::ProblemStatus::SUBOPTIMAL: std::cout << "SUBOPTIMAL"; break;
-            case model::ProblemStatus::TIME_LIMIT: std::cout << "TIME_LIMIT"; break;
-            case model::ProblemStatus::ITER_LIMIT: std::cout << "ITER_LIMIT"; break;
-            case model::ProblemStatus::NUMERICAL_ERROR: std::cout << "NUMERICAL_ERROR"; break;
-            default: std::cout << "UNKNOWN";
-        }
-        std::cout << "\n";
+        std::cout << "\nStatus: " << status_label(solution.status) << "\n";
         std::cout << "Objective: " << std::fixed << std::setprecision(6) << solution.objective_value << "\n";
         std::cout << "Gap: " << solution.gap << "\n";
         if (solution.bb_nodes > 0) {
@@ -150,10 +263,43 @@ int cmd_solve(int argc, char** argv) {
         }
         std::cout << "Time: " << elapsed << " ms\n";
 
+        validation::SolutionVerifier verifier;
+        validation::VerificationResult verification;
+        if (solution.is_feasible()) {
+            verification = verifier.verify_detailed(problem, to_model_solution(solution));
+            bool verified_ok = verification.optimal && verification.feasible;
+            std::cout << "Verification: "
+                      << (verified_ok ? "PASS (primal+dual+complementarity OK)" : "PARTIAL")
+                      << "\n";
+            std::cout << "  primal infeasibility:  " << std::scientific << verification.primal_infeasibility << "\n";
+            std::cout << "  dual infeasibility:    " << verification.dual_infeasibility << "\n";
+            std::cout << "  complementarity:       " << verification.complementarity << "\n";
+            if (problem.num_integer_vars() > 0) {
+                std::cout << "  integrality violation: " << verification.integrality_violation << "\n";
+            }
+        } else {
+            std::cout << "Verification: n/a (" << status_label(solution.status) << ")\n";
+        }
+
         if (!solution.primal.empty()) {
             std::cout << "\nSolution (first 10 vars):\n";
             for (std::size_t i = 0; i < std::min<std::size_t>(10, solution.primal.size()); ++i) {
                 std::cout << "  x[" << i << "] = " << solution.primal[i] << "\n";
+            }
+        }
+
+        if (!out_file.empty()) {
+            write_solution_file(out_file, problem, solution);
+            std::cout << "Solution written to " << out_file << "\n";
+        }
+        if (!report_file.empty()) {
+            auto report = solve_report_json(problem, solution, elapsed, verification);
+            std::ofstream ros(report_file);
+            if (!ros.is_open()) {
+                std::cerr << "Warning: cannot open report file: " << report_file << "\n";
+            } else {
+                ros << report.dump(2) << "\n";
+                std::cout << "Report written to " << report_file << "\n";
             }
         }
 
@@ -174,12 +320,7 @@ int cmd_iis(int argc, char** argv) {
     std::string model_file = argv[2];
 
     try {
-        Problem problem;
-        if (model_file.size() >= 4 && model_file.substr(model_file.size() - 4) == ".mps") {
-            problem = Problem::from_mps(model_file);
-        } else {
-            problem = Problem::from_lp(model_file);
-        }
+        Problem problem = load_problem(model_file);
 
         std::cout << "Problem: " << problem.name << "\n";
         std::cout << "Variables: " << problem.variables.size() << "\n";
@@ -206,12 +347,7 @@ int cmd_diagnose(int argc, char** argv) {
     std::string model_file = argv[2];
 
     try {
-        Problem problem;
-        if (model_file.size() >= 4 && model_file.substr(model_file.size() - 4) == ".mps") {
-            problem = Problem::from_mps(model_file);
-        } else {
-            problem = Problem::from_lp(model_file);
-        }
+        Problem problem = load_problem(model_file);
 
         std::cout << "Problem: " << problem.name << "\n";
         std::cout << "Variables: " << problem.variables.size() << "\n";
@@ -283,12 +419,7 @@ int cmd_quality(int argc, char** argv) {
     }
 
     try {
-        Problem problem;
-        if (model_file.size() >= 4 && model_file.substr(model_file.size() - 4) == ".mps") {
-            problem = Problem::from_mps(model_file);
-        } else {
-            problem = Problem::from_lp(model_file);
-        }
+        Problem problem = load_problem(model_file);
 
         std::cout << "Problem: " << problem.name << "\n";
         std::cout << "Variables: " << problem.variables.size() << "\n";
@@ -335,12 +466,7 @@ int cmd_convert(int argc, char** argv) {
     }
 
     try {
-        Problem problem;
-        if (input.size() >= 4 && input.substr(input.size() - 4) == ".mps") {
-            problem = Problem::from_mps(input);
-        } else {
-            problem = Problem::from_lp(input);
-        }
+        Problem problem = load_problem(input);
 
         if (output_file.empty()) {
             output_file = input.substr(0, input.find_last_of('.')) + "." + output_format;
@@ -371,12 +497,7 @@ int cmd_inspect(int argc, char** argv) {
     std::string model_file = argv[2];
 
     try {
-        Problem problem;
-        if (model_file.size() >= 4 && model_file.substr(model_file.size() - 4) == ".mps") {
-            problem = Problem::from_mps(model_file);
-        } else {
-            problem = Problem::from_lp(model_file);
-        }
+        Problem problem = load_problem(model_file);
 
         std::cout << "Problem: " << problem.name << "\n";
         std::cout << "Variables: " << problem.variables.size() << "\n";
@@ -508,6 +629,38 @@ int cmd_benchmark(int argc, char** argv) {
     }
 }
 
+int cmd_capabilities(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    std::cout << "HyperNova 0.1.0\n";
+    std::cout << "Problem classes : LP, MILP, QP (convex), MIQP (convex)\n";
+    std::cout << "Engines         : auto, primal-simplex, dual-simplex, interior-point,\n";
+    std::cout << "                  branch-and-bound, branch-and-cut, qp-active-set,\n";
+    std::cout << "                  qp-interior-point\n";
+    std::cout << "Pricing         : dantzig, devex, steepest-edge (simplex)\n";
+    std::cout << "Ratio test      : standard, harris (two-pass)\n";
+    std::cout << "Node selection  : best-first, depth-first, best-estimate, hybrid\n";
+    std::cout << "Branching       : most-fractional, pseudocost, strong, reliability\n";
+    std::cout << "Presolve        : off, conservative, aggressive\n";
+    std::cout << "Scaling         : none, geometric, curtis-reid\n";
+    std::cout << "Parallel B&B    : threads >= 2 (work-stealing pool)\n";
+    std::cout << "Diagnostics     : iis, diagnose (Farkas/unbounded-ray certificates),\n";
+    std::cout << "                  quality (kappa + coefficient stats + probe residuals)\n";
+    std::cout << "I/O             : MPS (free/fixed), CPLEX-style LP, JSON solution,\n";
+    std::cout << "                  JSON report, interactive model builder\n";
+
+    auto backends = execution::ComputeBackendFactory::available_backends();
+    std::cout << "Compute backends:";
+    if (backends.empty()) {
+        std::cout << " none";
+    }
+    for (auto b : backends) {
+        std::cout << " " << compute_backend_name(b);
+    }
+    std::cout << "\n";
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
         print_usage(argv[0]);
@@ -524,6 +677,8 @@ int main(int argc, char** argv) {
         return cmd_diagnose(argc, argv);
     } else if (command == "quality") {
         return cmd_quality(argc, argv);
+    } else if (command == "capabilities") {
+        return cmd_capabilities(argc, argv);
     } else if (command == "interactive") {
         return cmd_interactive(argc, argv);
     } else if (command == "convert") {
