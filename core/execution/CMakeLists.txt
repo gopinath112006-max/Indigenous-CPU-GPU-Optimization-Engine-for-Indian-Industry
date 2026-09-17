@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 add_library(hypernova_execution
     thread_pool.cpp
+    cuda_driver.cpp
+    cuda_kernels_ptx.cpp
     gpu_backend.cpp
 )
 

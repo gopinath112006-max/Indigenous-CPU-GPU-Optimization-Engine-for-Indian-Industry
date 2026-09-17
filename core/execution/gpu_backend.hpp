@@ -11,7 +11,8 @@ enum class ComputeBackendType {
     CPU,
     CUDA,
     HIP,
-    SYCL
+    SYCL,
+    AUTO // per-call cost-model dispatch between CPU and the best GPU backend
 };
 
 class IComputeBackend {
@@ -48,6 +49,10 @@ public:
     static ComputeBackendType best_available_backend();
 };
 
+// Initializes a throwaway CUDA backend and returns why it is unavailable
+// (empty string when a GPU is usable). Useful for diagnostics/CLI output.
+std::string cuda_backend_probe_error();
+
 class GPUCostModel {
 public:
     struct Decision {
@@ -63,6 +68,13 @@ public:
                             std::size_t nrows,
                             std::size_t ncols,
                             int batch_size = 1);
+
+    // Injects device parameters measured at runtime (a calibrated CUDA
+    // backend feeds these into AutoBackend at initialization). Values <= 0
+    // are ignored. Until a device rate is set, decide() always reports CPU:
+    // the GPU estimate is only meaningful with measured bandwidths.
+    static void set_device_params(double device_spmv_gbps, double h2d_gbps,
+                                  double d2h_gbps);
 
 private:
     static double estimate_cpu_spmv(const std::vector<double>& values,

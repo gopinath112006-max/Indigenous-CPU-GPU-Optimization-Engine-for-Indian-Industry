@@ -66,6 +66,12 @@ add_executable(test_api
 target_link_libraries(test_api PRIVATE hypernova_api)
 setup_test_target(test_api)
 
+add_executable(test_gpu_backend
+    test_gpu_backend.cpp
+)
+target_link_libraries(test_gpu_backend PRIVATE hypernova_execution)
+setup_test_target(test_gpu_backend)
+
 add_executable(test_roundtrip
     test_roundtrip.cpp
 )
