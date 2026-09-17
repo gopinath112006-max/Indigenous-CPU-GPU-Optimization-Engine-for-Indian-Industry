@@ -97,6 +97,14 @@ MPSParseResult MPSParser::parse_string(const std::string& content) {
         result_.success = false;
     } else {
         result_.problem = builder_.build();
+        // MPS integer blocks (MARKER INTORG/INTEND) declare integer variables;
+        // those that are also restricted to [0,1] by bounds are binary. Make
+        // that classification explicit so downstream engines branch correctly.
+        for (auto& v : result_.problem.variables) {
+            if (v.type == VarType::INTEGER && v.lower_bound >= 0.0 && v.upper_bound <= 1.0) {
+                v.type = VarType::BINARY;
+            }
+        }
         if (!constraint_triplets_.empty()) {
             result_.problem.constraint_matrix = numerical::SparseMatrix::from_triplets(
                 result_.problem.constraints.size(),
@@ -208,6 +216,13 @@ void MPSParser::parse_rows(const std::string& line) {
 }
 
 void MPSParser::parse_columns(const std::string& line) {
+    // MPS MARKER records (INTORG/INTEND) delimit the integer-variable block:
+    //     MARK0000  'MARKER'  'INTORG'
+    //     ...
+    //     MARK0001  'MARKER'  'INTEND'
+    // The parser must not turn the marker name into a variable.
+    if (is_marker_record(line)) return;
+
     auto parsed = free_format_ ? parse_free_format_line(line) : parse_fixed_format_line(line);
     if (!parsed) return;
 
@@ -220,8 +235,10 @@ void MPSParser::parse_columns(const std::string& line) {
     auto it = col_name_to_idx_.find(col_name);
     std::size_t col_idx;
     if (it == col_name_to_idx_.end()) {
+        model::VarType new_type = in_integer_block_ ? model::VarType::INTEGER
+                                                    : model::VarType::CONTINUOUS;
         col_idx = builder_.add_variable(0.0, std::numeric_limits<double>::infinity(),
-                                         VarType::CONTINUOUS, keep_names_ ? col_name : "");
+                                         new_type, keep_names_ ? col_name : "");
         col_name_to_idx_[col_name] = col_idx;
     } else {
         col_idx = it->second;
@@ -255,6 +272,38 @@ void MPSParser::parse_columns(const std::string& line) {
 
     set_coeff(row1_name, coeff1);
     set_coeff(row2_name, coeff2);
+}
+
+bool MPSParser::is_marker_record(const std::string& line) {
+    // Marker records are:  <name>  'MARKER'  'INTORG' | 'INTEND'
+    // Standard writers name the column arbitrarily (e.g. MARK0000); a record
+    // whose first token is the quoted string "MARKER" itself is also legal.
+    auto tokens = [&]() {
+        std::vector<std::string> toks;
+        std::istringstream iss(line);
+        std::string t;
+        while (iss >> t) {
+            if (t.size() >= 2 && t.front() == '\'') t.erase(0, 1);
+            if (!t.empty() && t.back() == '\'') t.pop_back();
+            toks.push_back(t);
+        }
+        return toks;
+    };
+
+    std::vector<std::string> t = tokens();
+    if (t.size() < 2) return false;
+    bool has_marker = false;
+    std::string kind;
+    for (std::size_t i = 0; i < t.size(); ++i) {
+        std::string u = t[i];
+        std::transform(u.begin(), u.end(), u.begin(), ::toupper);
+        if (u == "MARKER") { has_marker = true; continue; }
+        if (u == "INTORG" || u == "INTEND") { kind = u; break; }
+    }
+    if (!has_marker) return false;
+    if (kind == "INTORG") { in_integer_block_ = true; return true; }
+    if (kind == "INTEND") { in_integer_block_ = false; return true; }
+    return true;  // bare 'MARKER' name with no kind: still not a variable
 }
 
 void MPSParser::parse_rhs(const std::string& line) {

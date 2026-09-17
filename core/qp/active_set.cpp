@@ -1,4 +1,5 @@
 #include "active_set.hpp"
+#include <algorithm>
 #include "../numerical/refinement.hpp"
 #include <algorithm>
 #include <chrono>
@@ -116,7 +117,7 @@ ActiveSetResult ActiveSetQPSolver::solve(const model::Problem& problem) {
         auto end_time = std::chrono::high_resolution_clock::now();
         result.solve_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
     }
 

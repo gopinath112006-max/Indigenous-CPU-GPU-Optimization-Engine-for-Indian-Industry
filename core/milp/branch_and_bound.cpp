@@ -19,6 +19,7 @@ BranchAndBoundSolver::BranchAndBoundSolver(const numerical::ToleranceConfig& tol
 
 BranchAndBoundResult BranchAndBoundSolver::solve(const model::Problem& problem) {
     auto start_time = std::chrono::high_resolution_clock::now();
+    solve_start_time_ = start_time;
 
     BranchAndBoundResult result;
 
@@ -435,8 +436,39 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
             relax_objective = qp_result.objective_value;
         }
     } else {
-        lp::SimplexSolver simplex(tol_);
+        lp::SimplexOptions simplex_opts;
+        // Enforce the global B&B deadline on every node relaxation: a single
+        // hard LP would otherwise run unbounded and ignore the time limit.
+        if (options_.time_limit_seconds > 0.0) {
+            double elapsed =
+                std::chrono::duration<double>(
+                    std::chrono::high_resolution_clock::now() - solve_start_time_).count();
+            double remaining = options_.time_limit_seconds - elapsed;
+            simplex_opts.time_limit_seconds = remaining > 0.0 ? remaining : 1e-9;
+        }
+        simplex_opts.interrupt_callback = [this]() {
+            if (options_.interrupt_callback && options_.interrupt_callback()) return true;
+            if (options_.time_limit_seconds > 0.0) {
+                double elapsed =
+                    std::chrono::duration<double>(
+                        std::chrono::high_resolution_clock::now() - solve_start_time_).count();
+                return elapsed >= options_.time_limit_seconds;
+            }
+            return false;
+        };
+        lp::SimplexSolver simplex(tol_, simplex_opts);
         auto lp_result = simplex.solve(node_problem);
+        // The interrupt callback aborts with INTERRUPTED; if the global deadline
+        // is what tripped it, report the honest TIME_LIMIT status.
+        if (lp_result.status == model::ProblemStatus::INTERRUPTED &&
+            options_.time_limit_seconds > 0.0) {
+            double elapsed =
+                std::chrono::duration<double>(
+                    std::chrono::high_resolution_clock::now() - solve_start_time_).count();
+            if (elapsed >= options_.time_limit_seconds) {
+                lp_result.status = model::ProblemStatus::TIME_LIMIT;
+            }
+        }
         relax_status = lp_result.status;
         relax_primal = std::move(lp_result.primal);
         relax_objective = lp_result.objective_value;
@@ -477,8 +509,14 @@ int BranchAndBoundSolver::select_branching_variable(const BnBNode& node, const m
 
     std::size_t nvars = problem.variables.size();
     if (node.lp_solution.size() != nvars) return -1;
-    int best_var = -1;
-    double best_score = -1.0;
+
+    struct Candidate {
+        std::size_t var;
+        double frac;
+        double pseudo_score;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(nvars);
 
     for (std::size_t j = 0; j < nvars; ++j) {
         if (problem.variables[j].type == model::VarType::CONTINUOUS) continue;
@@ -487,50 +525,67 @@ int BranchAndBoundSolver::select_branching_variable(const BnBNode& node, const m
         double frac = val - std::floor(val);
         if (frac < tol_.feasibility_tol() || frac > 1.0 - tol_.feasibility_tol()) continue;
 
-        double score = 0.0;
-
-        switch (options_.branching.strategy) {
-            case BranchingStrategy::MOST_FRACTIONAL:
-                score = std::min(frac, 1.0 - frac);
-                break;
-
-            case BranchingStrategy::PSEUDOCOST: {
-                double up_score = pseudocost_up_[j] * (1.0 - frac);
-                double down_score = pseudocost_down_[j] * frac;
-                score = options_.branching.pseudocost_weight * std::max(up_score, down_score) +
-                        (1.0 - options_.branching.pseudocost_weight) * std::min(up_score, down_score);
-                break;
-            }
-
-            case BranchingStrategy::STRONG_BRANCHING: {
-                auto bounds = strong_branching(node, static_cast<int>(j), problem);
-                score = std::min(bounds[0], bounds[1]);
-                break;
-            }
-
-            case BranchingStrategy::RELIABILITY: {
-                double pseudo_score = 0.0;
-                double up_score = pseudocost_up_[j] * (1.0 - frac);
-                double down_score = pseudocost_down_[j] * frac;
-                pseudo_score = options_.branching.pseudocost_weight * std::max(up_score, down_score) +
+        double up_score = pseudocost_up_[j] * (1.0 - frac);
+        double down_score = pseudocost_down_[j] * frac;
+        double pseudo_score = options_.branching.pseudocost_weight * std::max(up_score, down_score) +
                               (1.0 - options_.branching.pseudocost_weight) * std::min(up_score, down_score);
+        candidates.push_back({j, frac, pseudo_score});
+    }
+    if (candidates.empty()) return -1;
 
-                double strong_score = 0.0;
-                if (pseudocount_up_[j] < 5 || pseudocount_down_[j] < 5) {
-                    auto bounds = strong_branching(node, static_cast<int>(j), problem);
-                    strong_score = std::min(bounds[0], bounds[1]);
-                } else {
-                    strong_score = pseudo_score;
-                }
-
-                score = 0.5 * pseudo_score + 0.5 * strong_score;
-                break;
+    const auto strategy = options_.branching.strategy;
+    if (strategy == BranchingStrategy::MOST_FRACTIONAL) {
+        int best_var = -1;
+        double best_score = -1.0;
+        for (const auto& cd : candidates) {
+            double score = std::min(cd.frac, 1.0 - cd.frac);
+            if (score > best_score) {
+                best_score = score;
+                best_var = static_cast<int>(cd.var);
             }
         }
+        return best_var;
+    }
+    if (strategy == BranchingStrategy::PSEUDOCOST) {
+        int best_var = -1;
+        double best_score = -1.0;
+        for (const auto& cd : candidates) {
+            if (cd.pseudo_score > best_score) {
+                best_score = cd.pseudo_score;
+                best_var = static_cast<int>(cd.var);
+            }
+        }
+        return best_var;
+    }
 
+    // STRONG_BRANCHING / RELIABILITY: strong branching costs two LP solves per
+    // candidate, so only evaluate the most promising candidates (by pseudocost
+    // score); the rest fall back to their pseudocost score. Without this cap a
+    // root node can trigger hundreds of LP solves.
+    const int cap = options_.branching.strong_branch_candidates;
+    if (cap > 0 && candidates.size() > static_cast<std::size_t>(cap)) {
+        std::partial_sort(candidates.begin(), candidates.begin() + cap, candidates.end(),
+                          [](const Candidate& a, const Candidate& b) {
+                              return a.pseudo_score > b.pseudo_score;
+                          });
+        candidates.resize(static_cast<std::size_t>(cap));
+    }
+
+    int best_var = -1;
+    double best_score = -1.0;
+    for (const auto& cd : candidates) {
+        double strong_score = cd.pseudo_score;
+        if (strategy == BranchingStrategy::STRONG_BRANCHING ||
+            pseudocount_up_[cd.var] < 5 || pseudocount_down_[cd.var] < 5) {
+            auto bounds = strong_branching(node, static_cast<int>(cd.var), problem);
+            strong_score = std::min(bounds[0], bounds[1]);
+        }
+        double score = (strategy == BranchingStrategy::STRONG_BRANCHING)
+                           ? strong_score
+                           : 0.5 * cd.pseudo_score + 0.5 * strong_score;
         if (score > best_score) {
             best_score = score;
-            best_var = static_cast<int>(j);
+            best_var = static_cast<int>(cd.var);
         }
     }
 
@@ -758,9 +813,26 @@ double BranchAndBoundSolver::compute_best_bound() const {
     for (const auto& node : nodes_) {
         // A branched node is already expanded into its children, so its lower
         // bound is not part of the remaining frontier.
-        if (!node.pruned && node.lp_solved && !node.branched) {
-            bound = std::min(bound, node.lower_bound);
+        if (node.pruned || node.branched) continue;
+        double lb = node.lower_bound;
+        if (!std::isfinite(lb)) {
+            // An unsolved frontier node inherits the bound of its nearest solved
+            // ancestor: branching only tightens the feasible region, so that
+            // ancestor's LP bound remains a valid lower bound for its subtree.
+            const std::size_t self_id = node.id;
+            std::size_t pid = node.parent_id;
+            std::size_t guard = 0;
+            while (pid < id_to_index_.size() && guard++ < nodes_.size()) {
+                std::size_t pidx = id_to_index_[pid];
+                if (pidx >= nodes_.size()) break;
+                const BnBNode& parent = nodes_[pidx];
+                if (parent.id == self_id) break;
+                if (std::isfinite(parent.lower_bound)) { lb = parent.lower_bound; break; }
+                if (parent.id == parent.parent_id || parent.parent_id == pid) break;
+                pid = parent.parent_id;
+            }
         }
+        if (std::isfinite(lb)) bound = std::min(bound, lb);
     }
     if (bound == std::numeric_limits<double>::infinity()) {
         bound = best_objective_;

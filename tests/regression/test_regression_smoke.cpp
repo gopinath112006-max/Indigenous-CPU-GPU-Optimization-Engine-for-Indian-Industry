@@ -90,6 +90,20 @@ TEST(RegressionSmoke, SolveBinaryMilp) {
     EXPECT_EQ(problem.num_integer_vars(), problem.variables.size());
 }
 
+TEST(RegressionSmoke, LoadQplibStyleLp) {
+    auto problem = Problem::from_lp(root("qplib_inline.lp"));
+    EXPECT_EQ(problem.num_binary_vars(), 3u);
+    EXPECT_EQ(problem.num_continuous_vars(), 0u);
+    EXPECT_EQ(problem.constraints.size(), 1u);
+    EXPECT_TRUE(problem.is_miqp());
+    EXPECT_GT(problem.quadratic_terms.size(), 0u);
+
+    Solver solver;
+    auto sol = solver.solve(problem);
+    EXPECT_TRUE(sol.is_optimal()) << static_cast<int>(sol.status);
+    EXPECT_TRUE(close_relative(sol.objective_value, 0.0));
+}
+
 // -- Netlib baseline subset (all instances marked OPTIMAL in BASELINE.md) ----
 
 TEST(RegressionSmoke, NetlibBaselineObjectives) {

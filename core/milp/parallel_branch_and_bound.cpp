@@ -514,9 +514,25 @@ struct ParallelContext {
     double compute_best_bound() const {
         double best = std::numeric_limits<double>::infinity();
         for (const auto& nd : nodes_) {
-            if (!nd.pruned && nd.lp_solved && !nd.branched) {
-                best = std::min(best, nd.lower_bound);
+            if (nd.pruned || nd.branched) continue;
+            double lb = nd.lower_bound;
+            if (!std::isfinite(lb)) {
+                // Unsolved frontier nodes inherit the bound of their nearest
+                // solved ancestor (branching only tightens the region).
+                const std::size_t self_id = nd.id;
+                std::size_t pid = nd.parent_id;
+                std::size_t guard = 0;
+                while (pid < id_to_index_.size() && guard++ < nodes_.size()) {
+                    std::size_t pidx = id_to_index_[pid];
+                    if (pidx >= nodes_.size()) break;
+                    const BnBNode& parent = nodes_[pidx];
+                    if (parent.id == self_id) break;
+                    if (std::isfinite(parent.lower_bound)) { lb = parent.lower_bound; break; }
+                    if (parent.id == parent.parent_id || parent.parent_id == pid) break;
+                    pid = parent.parent_id;
+                }
             }
+            if (std::isfinite(lb)) best = std::min(best, lb);
         }
         return (best == std::numeric_limits<double>::infinity()) ? incumbent_.load() : best;
     }

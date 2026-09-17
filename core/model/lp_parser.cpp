@@ -28,6 +28,9 @@ LPParseResult LPParser::parse_string(const std::string& content) {
     var_name_to_idx_.clear();
     con_name_to_idx_.clear();
     obj_sense_ = ObjectiveSense::MINIMIZE;
+    obj_buf_.clear();
+    con_acc_.clear();
+    con_acc_name_.clear();
 
     Section current_section = Section::NONE;
     std::istringstream stream(content);
@@ -42,6 +45,8 @@ LPParseResult LPParser::parse_string(const std::string& content) {
 
         Section new_section = detect_section(trimmed);
         if (new_section != Section::NONE) {
+            if (current_section == Section::OBJ) finalize_obj();
+            if (current_section == Section::CONSTRAINTS) finalize_constraint();
             current_section = new_section;
             continue;
         }
@@ -50,8 +55,35 @@ LPParseResult LPParser::parse_string(const std::string& content) {
 
         try {
             switch (current_section) {
-                case Section::OBJ: parse_obj(trimmed); break;
-                case Section::CONSTRAINTS: parse_constraints(trimmed); break;
+                case Section::OBJ: {
+                    std::string expr = trimmed;
+                    std::size_t colon_pos = expr.find(':');
+                    if (colon_pos != std::string::npos) {
+                        expr = expr.substr(colon_pos + 1);
+                    }
+                    obj_buf_ += " " + expr;
+                    break;
+                }
+                case Section::CONSTRAINTS: {
+                    if (trimmed.find(':') != std::string::npos) {
+                        if (!con_acc_.empty()) {
+                            result_.errors.push_back("Unterminated constraint before: " + trimmed);
+                            con_acc_.clear();
+                            con_acc_name_.clear();
+                        }
+                        std::size_t colon_pos = trimmed.find(':');
+                        con_acc_name_ = trim(trimmed.substr(0, colon_pos));
+                        con_acc_ = trim(trimmed.substr(colon_pos + 1));
+                    } else {
+                        con_acc_ += " " + trimmed;
+                    }
+                    bool has_sense = con_acc_.find("<=") != std::string::npos ||
+                                     con_acc_.find(">=") != std::string::npos ||
+                                     con_acc_.find('=') != std::string::npos ||
+                                     con_acc_.find("==") != std::string::npos;
+                    if (has_sense) finalize_constraint();
+                    break;
+                }
                 case Section::BOUNDS: parse_bounds(trimmed); break;
                 case Section::GENERAL: parse_general(trimmed); break;
                 case Section::BINARY: parse_binary(trimmed); break;
@@ -63,6 +95,9 @@ LPParseResult LPParser::parse_string(const std::string& content) {
             result_.errors.push_back("Line " + std::to_string(line_num) + ": " + e.what());
         }
     }
+
+    if (current_section == Section::OBJ) finalize_obj();
+    if (current_section == Section::CONSTRAINTS) finalize_constraint();
 
     if (!result_.errors.empty()) {
         result_.success = false;
@@ -95,55 +130,113 @@ LPParser::Section LPParser::detect_section(const std::string& line) {
     return Section::NONE;
 }
 
-void LPParser::parse_obj(const std::string& line) {
-    std::string expr = line;
-    std::size_t colon_pos = expr.find(':');
-    if (colon_pos != std::string::npos) {
-        expr = trim(expr.substr(colon_pos + 1));
+void LPParser::finalize_obj() {
+    if (obj_buf_.empty()) return;
+
+    std::string linear;
+    std::vector<std::pair<double, std::string>> qgroups;
+    std::string cur;
+    int depth = 0;
+    double group_sign = 1.0;
+
+    std::size_t i = 0;
+    const std::size_t n = obj_buf_.size();
+    while (i < n) {
+        char c = obj_buf_[i];
+        if (c == '[') {
+            if (depth == 0) {
+                std::size_t k = cur.find_last_not_of(" \t");
+                if (k != std::string::npos && (cur[k] == '+' || cur[k] == '-')) {
+                    group_sign = (cur[k] == '-') ? -1.0 : 1.0;
+                    cur.erase(k);
+                } else {
+                    group_sign = 1.0;
+                }
+            }
+            ++depth;
+            ++i;
+            continue;
+        }
+        if (c == ']') {
+            if (depth > 0) {
+                --depth;
+                if (depth == 0) {
+                    qgroups.emplace_back(group_sign, trim(cur));
+                    cur.clear();
+                    group_sign = 1.0;
+                }
+            }
+            ++i;
+            continue;
+        }
+        if (depth > 0) cur += c;
+        else linear += c;
+        ++i;
     }
-    auto terms = parse_linear_expr(expr);
-    for (const auto& [idx, coeff] : terms) {
-        if (idx < builder_.get_problem().variables.size()) {
-            builder_.get_problem().variables[idx].objective_coeff = coeff;
+    if (depth > 0 && !trim(cur).empty()) {
+        qgroups.emplace_back(group_sign, trim(cur));
+    }
+
+    auto lterms = parse_linear_expr(linear);
+    Problem& prob = builder_.get_problem();
+    for (const auto& [idx, coeff] : lterms) {
+        if (idx < prob.variables.size()) {
+            prob.variables[idx].objective_coeff = coeff;
         }
     }
+    for (const auto& [sg, content] : qgroups) {
+        if (content.empty()) continue;
+        for (const auto& term : parse_quadratic_expr(content)) {
+            double coeff = sg * term.coeff;
+            if (term.row == term.col) coeff *= 2.0;
+            builder_.add_quadratic_term(term.row, term.col, coeff);
+        }
+    }
+    obj_buf_.clear();
 }
 
-void LPParser::parse_constraints(const std::string& line) {
-    std::string con_name;
-    std::string expr_str;
+void LPParser::finalize_constraint() {
+    if (con_acc_.empty() && con_acc_name_.empty()) return;
+
+    std::string expr = con_acc_;
     ConstraintSense sense = ConstraintSense::LE;
-    double rhs = 0.0;
-
-    std::size_t colon_pos = line.find(':');
-    if (colon_pos != std::string::npos) {
-        con_name = trim(line.substr(0, colon_pos));
-        expr_str = trim(line.substr(colon_pos + 1));
-    } else {
-        con_name = "c" + std::to_string(builder_.get_problem().constraints.size());
-        expr_str = line;
-    }
-
     std::size_t sense_pos = std::string::npos;
-    for (std::size_t i = 0; i + 1 < expr_str.size(); ++i) {
-        if (expr_str[i] == '<' && expr_str[i+1] == '=') { sense_pos = i; sense = ConstraintSense::LE; break; }
-        if (expr_str[i] == '>' && expr_str[i+1] == '=') { sense_pos = i; sense = ConstraintSense::GE; break; }
-        if (expr_str[i] == '=') { sense_pos = i; sense = ConstraintSense::EQ; break; }
+    for (std::size_t i = 0; i + 1 < expr.size(); ++i) {
+        if (expr[i] == '<' && expr[i+1] == '=') { sense_pos = i; sense = ConstraintSense::LE; break; }
+        if (expr[i] == '>' && expr[i+1] == '=') { sense_pos = i; sense = ConstraintSense::GE; break; }
+    }
+    if (sense_pos == std::string::npos) {
+        sense_pos = expr.find('=');
+        if (sense_pos != std::string::npos) sense = ConstraintSense::EQ;
     }
 
-    if (sense_pos != std::string::npos) {
-        std::string lhs = trim(expr_str.substr(0, sense_pos));
-        std::string rhs_str = trim(expr_str.substr(sense_pos + (sense == ConstraintSense::EQ ? 1 : 2)));
-        rhs = std::stod(rhs_str);
-        expr_str = lhs;
-    } else {
-        result_.errors.push_back("Invalid constraint format: " + line);
+    if (sense_pos == std::string::npos) {
+        result_.errors.push_back("Invalid constraint format: " + expr);
+        con_acc_.clear();
+        con_acc_name_.clear();
         return;
     }
 
-    auto terms = parse_linear_expr(expr_str);
-    builder_.add_constraint(terms, sense, rhs, keep_names_ ? con_name : "");
-    con_name_to_idx_[con_name] = builder_.get_problem().constraints.size() - 1;
+    std::string lhs = trim(expr.substr(0, sense_pos));
+    std::string rhs_str = trim(expr.substr(sense_pos + (sense == ConstraintSense::EQ ? 1 : 2)));
+    if (rhs_str.empty()) {
+        return;
+    }
+    double rhs = 0.0;
+    try {
+        rhs = std::stod(rhs_str);
+    } catch (const std::exception&) {
+        result_.errors.push_back("Invalid constraint RHS: " + rhs_str);
+        con_acc_.clear();
+        con_acc_name_.clear();
+        return;
+    }
+
+    auto terms = parse_linear_expr(lhs);
+    builder_.add_constraint(terms, sense, rhs, keep_names_ ? con_acc_name_ : "");
+    con_name_to_idx_[con_acc_name_] = builder_.get_problem().constraints.size() - 1;
+    con_acc_.clear();
+    con_acc_name_.clear();
 }
 
 void LPParser::parse_bounds(const std::string& line) {
@@ -310,6 +403,13 @@ std::vector<std::pair<std::size_t, double>> LPParser::parse_linear_expr(const st
         double coeff = 1.0;
         std::size_t coeff_end = pos;
         while (coeff_end < s.size() && (std::isdigit(s[coeff_end]) || s[coeff_end] == '.')) ++coeff_end;
+        if (coeff_end < s.size() && (s[coeff_end] == 'e' || s[coeff_end] == 'E')) {
+            std::size_t e_next = coeff_end + 1;
+            if (e_next < s.size() && (s[e_next] == '+' || s[e_next] == '-')) ++e_next;
+            std::size_t e_digits = e_next;
+            while (e_digits < s.size() && std::isdigit(s[e_digits])) ++e_digits;
+            if (e_digits > e_next) coeff_end = e_digits;
+        }
         if (coeff_end > pos) {
             coeff = std::stod(s.substr(pos, coeff_end - pos));
             pos = coeff_end;
@@ -435,8 +535,10 @@ std::vector<QuadTerm> LPParser::parse_quadratic_expr(const std::string& expr) {
 
         // Coefficient before the product, if present.
         double coeff = 1.0;
+        bool has_leading_coeff = false;
         if (toks[i].kind == Kind::NUM) {
             coeff = toks[i].num;
+            has_leading_coeff = true;
             ++i;
             while (i < ntoks && (toks[i].kind == Kind::SEP || toks[i].kind == Kind::POWER)) ++i;
         }
@@ -469,7 +571,7 @@ std::vector<QuadTerm> LPParser::parse_quadratic_expr(const std::string& expr) {
 
         // Coefficient after the product ("x * x 2"), the form emitted by
         // write_lp. Only honoured when no leading coefficient was given.
-        if (i < ntoks && toks[i].kind == Kind::NUM) {
+        if (!has_leading_coeff && i < ntoks && toks[i].kind == Kind::NUM) {
             coeff = toks[i].num;
             ++i;
         }
@@ -595,7 +697,8 @@ void write_lp(const Problem& problem, const std::string& filepath) {
     if (!problem.quadratic_terms.empty()) {
         file << "\nQuadratic\n";
         for (const auto& term : problem.quadratic_terms) {
-            file << " " << problem.variables[term.row].name << " * " << problem.variables[term.col].name << " " << term.coeff << "\n";
+            double coeff = (term.row == term.col) ? 0.5 * term.coeff : term.coeff;
+            file << " " << problem.variables[term.row].name << " * " << problem.variables[term.col].name << " " << coeff << "\n";
         }
     }
 

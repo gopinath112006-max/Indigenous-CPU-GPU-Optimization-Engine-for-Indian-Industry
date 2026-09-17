@@ -45,10 +45,14 @@ private:
     std::unordered_map<std::string, std::size_t> var_name_to_idx_;
     std::unordered_map<std::string, std::size_t> con_name_to_idx_;
     ObjectiveSense obj_sense_ = ObjectiveSense::MINIMIZE;
+    std::string obj_buf_;
+    std::string con_acc_;
+    std::string con_acc_name_;
 
     Section detect_section(const std::string& line);
-    void parse_obj(const std::string& line);
+    void finalize_obj();
     void parse_constraints(const std::string& line);
+    void finalize_constraint();
     void parse_bounds(const std::string& line);
     void parse_general(const std::string& line);
     void parse_binary(const std::string& line);

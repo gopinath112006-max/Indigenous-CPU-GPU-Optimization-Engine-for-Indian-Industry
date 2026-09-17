@@ -29,8 +29,14 @@ protected:
 
 class RoundingHeuristic : public Heuristic {
 public:
-    using Heuristic::Heuristic;
+    explicit RoundingHeuristic(const numerical::ToleranceConfig& tol = numerical::ToleranceConfig::industrial_defaults(),
+                               int trials = 60, unsigned seed = 0x9e3779b9u);
     HeuristicResult run(const model::Problem& problem, const std::vector<double>& lp_solution) override;
+
+private:
+    void repair(const model::Problem& problem, std::vector<double>& x) const;
+    int trials_;
+    unsigned seed_;
 };
 
 class DivingHeuristic : public Heuristic {

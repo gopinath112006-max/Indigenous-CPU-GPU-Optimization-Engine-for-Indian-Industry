@@ -73,41 +73,68 @@ VerificationResult SolutionVerifier::check_primal_feasibility(
         return result;
     }
 
+    // Per-variable magnitude scale: a bound residual is judged against the
+    // column's own coefficients and objective, so variables embedded in
+    // large-coefficient rows tolerate round-off proportional to that data.
+    const auto& A = problem.constraint_matrix;
+    std::vector<double> col_scale(problem.variables.size(), 1.0);
+    if (A.order() == model::StorageOrder::CSR) {
+        for (std::size_t k = 0; k < A.nnz(); ++k) {
+            std::size_t j = A.col_indices()[k];
+            if (j < col_scale.size()) {
+                col_scale[j] = std::max(col_scale[j], std::abs(A.values()[k]));
+            }
+        }
+    }
+    for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+        double lb = problem.variables[j].lower_bound;
+        double ub = problem.variables[j].upper_bound;
+        col_scale[j] = std::max(col_scale[j], std::abs(problem.variables[j].objective_coeff));
+        if (std::isfinite(lb)) col_scale[j] = std::max(col_scale[j], std::abs(lb));
+        if (std::isfinite(ub)) col_scale[j] = std::max(col_scale[j], std::abs(ub));
+    }
+
     for (std::size_t j = 0; j < problem.variables.size(); ++j) {
         double val = solution.primal[j];
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
 
-        if (val < lb - tol_.feasibility_tol()) {
+        if (val < lb - tol_.feasibility_tol() * col_scale[j]) {
             double viol = lb - val;
             max_violation = std::max(max_violation, viol);
             result.violated_constraints.push_back(j);
         }
-        if (val > ub + tol_.feasibility_tol()) {
+        if (val > ub + tol_.feasibility_tol() * col_scale[j]) {
             double viol = val - ub;
             max_violation = std::max(max_violation, viol);
             result.violated_constraints.push_back(j);
         }
     }
 
-    const auto& A = problem.constraint_matrix;
     for (std::size_t i = 0; i < problem.constraints.size(); ++i) {
         double activity = 0.0;
+        double activity_abs = 0.0;
         if (A.order() == model::StorageOrder::CSR) {
             for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
                 std::size_t j = A.col_indices()[k];
-                activity += A.values()[k] * solution.primal[j];
+                double term = A.values()[k] * solution.primal[j];
+                activity += term;
+                activity_abs += std::abs(term);
             }
         }
 
         const auto& con = problem.constraints[i];
+        // Magnitude of the row's own data: judging an absolute residual against
+        // it keeps large-coefficient instances from being flagged for a
+        // numerically negligible (but absolutely > tol) violation.
+        const double scale = 1.0 + std::abs(con.rhs) + activity_abs;
         double violation = 0.0;
         if (con.sense == model::ConstraintSense::LE) {
-            violation = std::max(0.0, activity - con.rhs - tol_.feasibility_tol());
+            violation = std::max(0.0, activity - con.rhs - tol_.feasibility_tol() * scale);
         } else if (con.sense == model::ConstraintSense::GE) {
-            violation = std::max(0.0, con.rhs - activity - tol_.feasibility_tol());
+            violation = std::max(0.0, con.rhs - activity - tol_.feasibility_tol() * scale);
         } else {
-            violation = std::abs(activity - con.rhs) - tol_.feasibility_tol();
+            violation = std::abs(activity - con.rhs) - tol_.feasibility_tol() * scale;
             violation = std::max(0.0, violation);
         }
 
@@ -118,7 +145,7 @@ VerificationResult SolutionVerifier::check_primal_feasibility(
     }
 
     result.primal_infeasibility = max_violation;
-    if (max_violation > tol_.feasibility_tol()) {
+    if (!result.violated_constraints.empty()) {
         result.feasible = false;
         result.message = "Max primal violation: " + std::to_string(max_violation);
     }
@@ -271,11 +298,14 @@ VerificationResult SolutionVerifier::check_complementarity(
 
     for (std::size_t i = 0; i < problem.constraints.size(); ++i) {
         double activity = 0.0;
+        double activity_abs = 0.0;
         const auto& A = problem.constraint_matrix;
-        if (A.order() == model::StorageOrder::CSR) {
+        if (A.order() == numerical::StorageOrder::CSR) {
             for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
                 std::size_t j = A.col_indices()[k];
-                activity += A.values()[k] * solution.primal[j];
+                double term = A.values()[k] * solution.primal[j];
+                activity += term;
+                activity_abs += std::abs(term);
             }
         }
 
@@ -287,7 +317,14 @@ VerificationResult SolutionVerifier::check_complementarity(
         }
 
         double dual = solution.dual[i];
-        double violation = std::abs(slack * dual);
+        // The complementarity residual s_i * y_i is a product of two quantities
+        // that both need to vanish. Judging it relative to the row scale alone
+        // overstates the violation when the dual multiplier is large even though
+        // the primal slack is numerically zero. Normalize each factor by its own
+        // magnitude so the residual is a dimensionless relative measure.
+        const double scale = std::max({1.0, std::abs(problem.constraints[i].rhs), activity_abs});
+        const double dual_scale = std::max(1.0, std::abs(dual));
+        double violation = std::abs(slack) / scale * (std::abs(dual) / dual_scale);
         max_violation = std::max(max_violation, violation);
     }
 

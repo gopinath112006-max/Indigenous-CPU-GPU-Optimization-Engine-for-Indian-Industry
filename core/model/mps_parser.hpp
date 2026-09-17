@@ -50,6 +50,7 @@ private:
     std::size_t current_row_ = 0;
     std::size_t current_col_ = 0;
     std::string obj_row_name_;
+    bool in_integer_block_ = false;
     std::unordered_map<std::string, std::size_t> col_name_to_idx_;
     std::vector<numerical::Triplet> constraint_triplets_;
 
@@ -58,6 +59,7 @@ private:
     void parse_name(const std::string& line);
     void parse_rows(const std::string& line);
     void parse_columns(const std::string& line);
+    bool is_marker_record(const std::string& line);
     void parse_rhs(const std::string& line);
     void parse_ranges(const std::string& line);
     void parse_bounds(const std::string& line);

@@ -122,6 +122,40 @@ ENDATA
     EXPECT_TRUE(result.problem.is_milp());
 }
 
+TEST(MPSParserTest, IntegerMarkersDeclareIntegerVariables) {
+    // Regression: MARKER 'INTORG'/'INTEND' records delimit the integer-variable
+    // block. Columns inside must become integer; the marker records themselves
+    // must never be turned into variables.
+    std::string mps_content = R"(
+NAME          MARKER_TEST
+ROWS
+ N  OBJ
+ L  C1
+COLUMNS
+    MARK0000  'MARKER'                 'INTORG'
+    X1        OBJ        1.0       C1        1.0
+    X2        OBJ        2.0       C1        1.0
+    MARK0001  'MARKER'                 'INTEND'
+    X3        OBJ        3.0       C1        1.0
+RHS
+    RHS1      C1        10.0
+BOUNDS
+ UP BND       X1        5.0
+ UP BND       X2        5.0
+ UP BND       X3        5.0
+ENDATA
+)";
+
+    MPSParser parser;
+    auto result = parser.parse_string(mps_content);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.problem.variables.size(), 3);  // MARKER records excluded
+    EXPECT_EQ(result.problem.num_integer_vars(), 2);
+    EXPECT_EQ(result.problem.num_continuous_vars(), 1);
+    EXPECT_TRUE(result.problem.is_milp());
+}
+
 TEST(MPSParserTest, QPWithQuadraticObjective) {
     std::string mps_content = R"(
 NAME          QP_TEST

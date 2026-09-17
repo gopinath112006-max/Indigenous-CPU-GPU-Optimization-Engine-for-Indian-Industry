@@ -53,87 +53,128 @@ double Heuristic::compute_objective(const model::Problem& problem, const std::ve
     }
     return obj;
 }
+RoundingHeuristic::RoundingHeuristic(const numerical::ToleranceConfig& tol, int trials, unsigned seed)
+    : Heuristic(tol), trials_(trials), seed_(seed) {}
+
+void RoundingHeuristic::repair(const model::Problem& problem, std::vector<double>& x) const {
+    const auto& A = problem.constraint_matrix;
+    // Repair pass: for every violated row, nudge one variable in that row to
+    // reduce the violation. Unlike a continuous-slack-only repair this also
+    // moves integer variables (in integer steps), so pure-integer MIPs can be
+    // repaired at all. Multiple sweeps let repairs propagate between rows.
+    for (int sweep = 0; sweep < 8; ++sweep) {
+        bool repaired_any = false;
+        for (std::size_t i = 0; i < problem.constraints.size(); ++i) {
+            double activity = 0.0;
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                activity += A.values()[k] * x[A.col_indices()[k]];
+            }
+
+            const auto& con = problem.constraints[i];
+            const double viol = activity - con.rhs;  // LE: >0, GE: <0, EQ: any
+            if (std::abs(viol) <= tol_.feasibility_tol()) continue;
+
+            // Pick the single variable whose move best reduces |violation|.
+            std::size_t best_j = std::numeric_limits<std::size_t>::max();
+            double best_new = 0.0;
+            double best_abs_viol = std::abs(viol);
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                std::size_t j = A.col_indices()[k];
+                const double coeff = A.values()[k];
+                if (std::abs(coeff) <= tol_.feasibility_tol()) continue;
+
+                const double old = x[j];
+                const double lb = problem.variables[j].lower_bound;
+                const double ub = problem.variables[j].upper_bound;
+                double delta = -viol / coeff;   // continuous step to zero the row
+                double nv = old + delta;
+
+                if (problem.variables[j].type != model::VarType::CONTINUOUS) {
+                    double rdelta = std::round(delta);
+                    if (std::abs(rdelta) < 0.5) rdelta = (delta >= 0.0) ? 1.0 : -1.0;
+                    nv = old + rdelta;
+                }
+                nv = std::clamp(nv, lb, ub);
+
+                const double abs_viol = std::abs(viol + coeff * (nv - old));
+                if (abs_viol < best_abs_viol - tol_.feasibility_tol()) {
+                    best_abs_viol = abs_viol;
+                    best_j = j;
+                    best_new = nv;
+                }
+            }
+            if (best_j != std::numeric_limits<std::size_t>::max()) {
+                x[best_j] = best_new;
+                repaired_any = true;
+            }
+        }
+        if (!repaired_any) break;
+    }
+}
 
 HeuristicResult RoundingHeuristic::run(const model::Problem& problem, const std::vector<double>& lp_solution) {
     HeuristicResult result;
     result.solution = lp_solution;
-
-    for (std::size_t j = 0; j < problem.variables.size(); ++j) {
-        if (problem.variables[j].type != model::VarType::CONTINUOUS) {
-            double val = result.solution[j];
-            double rounded = std::round(val);
-            double lb = problem.variables[j].lower_bound;
-            double ub = problem.variables[j].upper_bound;
-
-            if (rounded < lb) rounded = lb;
-            if (rounded > ub) rounded = ub;
-
-            if (std::abs(rounded - lb) < tol_.feasibility_tol()) rounded = lb;
-            if (std::abs(rounded - ub) < tol_.feasibility_tol()) rounded = ub;
-
-            result.solution[j] = rounded;
-        }
-    }
+    if (lp_solution.size() != problem.variables.size()) return result;
 
     const auto& A = problem.constraint_matrix;
-    if (A.order() != model::StorageOrder::CSR || A.rows() != problem.constraints.size()) {
-        // Not usable: fall back to a plain feas-check on the rounded solution.
-        if (check_feasibility(problem, result.solution)) {
-            result.found_solution = true;
-            result.objective_value = compute_objective(problem, result.solution);
+    const bool matrix_ok =
+        A.order() == model::StorageOrder::CSR && A.rows() == problem.constraints.size();
+
+    std::mt19937 rng(seed_);
+    std::uniform_real_distribution<double> uni(0.0, 1.0);
+
+    double best_obj = 0.0;
+    bool have_best = false;
+    std::vector<double> best_x;
+
+    // Trial 0 is the deterministic nearest rounding; the rest are randomized
+    // roundings (ceil with probability equal to the fractional part). Restarts
+    // explore round-up/round-down combinations the single rounding misses.
+    const int trials = matrix_ok ? std::max(1, trials_) : 1;
+    for (int trial = 0; trial < trials; ++trial) {
+        std::vector<double> x = lp_solution;
+        for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+            const auto& var = problem.variables[j];
+            if (var.type == model::VarType::CONTINUOUS) continue;
+
+            const double val = x[j];
+            double rounded;
+            if (trial == 0) {
+                rounded = std::round(val);
+            } else {
+                const double floor_v = std::floor(val);
+                rounded = (uni(rng) < val - floor_v) ? floor_v + 1.0 : floor_v;
+            }
+            const double lb = var.lower_bound;
+            const double ub = var.upper_bound;
+            rounded = std::clamp(rounded, lb, ub);
+            if (std::abs(rounded - lb) < tol_.feasibility_tol()) rounded = lb;
+            if (std::abs(rounded - ub) < tol_.feasibility_tol()) rounded = ub;
+            x[j] = rounded;
         }
-        return result;
+
+        if (matrix_ok) repair(problem, x);
+
+        if (check_feasibility(problem, x)) {
+            const double obj = compute_objective(problem, x);
+            const bool better =
+                !have_best ||
+                (problem.obj_sense == model::ObjectiveSense::MAXIMIZE ? obj > best_obj
+                                                                      : obj < best_obj);
+            if (better) {
+                have_best = true;
+                best_obj = obj;
+                best_x = std::move(x);
+            }
+        }
     }
-    for (std::size_t i = 0; i < problem.constraints.size(); ++i) {
-        double activity = 0.0;
-        if (A.order() == model::StorageOrder::CSR) {
-            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-                std::size_t j = A.col_indices()[k];
-                activity += A.values()[k] * result.solution[j];
-            }
-        }
 
-        const auto& con = problem.constraints[i];
-        double excess = 0.0;
-        if (con.sense == model::ConstraintSense::LE) {
-            excess = activity - con.rhs;
-        } else if (con.sense == model::ConstraintSense::GE) {
-            excess = con.rhs - activity;
-        } else {
-            excess = std::abs(activity - con.rhs);
-        }
-
-        if (excess <= tol_.feasibility_tol()) continue;
-
-        for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-            std::size_t j = A.col_indices()[k];
-            if (problem.variables[j].type != model::VarType::CONTINUOUS) continue;
-            double coeff = A.values()[k];
-            if (std::abs(coeff) < tol_.feasibility_tol()) continue;
-
-            double adjustment = excess / coeff;
-            double new_val = result.solution[j] - adjustment;
-            double lb = problem.variables[j].lower_bound;
-            double ub = problem.variables[j].upper_bound;
-            new_val = std::clamp(new_val, lb, ub);
-
-            if (con.sense == model::ConstraintSense::LE || con.sense == model::ConstraintSense::EQ) {
-                if (new_val > result.solution[j]) new_val = result.solution[j];
-            }
-            if (con.sense == model::ConstraintSense::GE || con.sense == model::ConstraintSense::EQ) {
-                if (new_val < result.solution[j]) new_val = result.solution[j];
-            }
-
-            result.solution[j] = new_val;
-            break;
-        }
-    }
-
-    if (check_feasibility(problem, result.solution)) {
+    if (have_best) {
         result.found_solution = true;
-        result.objective_value = compute_objective(problem, result.solution);
+        result.solution = std::move(best_x);
+        result.objective_value = best_obj;
     }
-
     return result;
 }
 

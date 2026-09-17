@@ -113,7 +113,8 @@ void compute_md_order_and_pattern(const SparseMatrix& A,
                                   std::vector<std::size_t>& perm,
                                   std::vector<std::size_t>& inv_perm,
                                   std::vector<std::size_t>& L_row_ptr,
-                                  std::vector<std::size_t>& L_col_indices) {
+                                  std::vector<std::size_t>& L_col_indices,
+                                  const std::function<bool()>& interrupt = {}) {
     const std::size_t n = A.rows();
     perm.assign(n, n);
     inv_perm.assign(n, n);
@@ -135,6 +136,7 @@ void compute_md_order_and_pattern(const SparseMatrix& A,
     }
 
     for (std::size_t r = 0; r < n; ++r) {
+        if (interrupt && (r & 15u) == 0u && interrupt()) break;
         std::size_t best = n;
         std::size_t best_deg = n + 1;
         for (std::size_t v = 0; v < n; ++v) {
@@ -165,6 +167,7 @@ void compute_md_order_and_pattern(const SparseMatrix& A,
 
         for (const std::size_t a : adj[best]) {
             if (!live[a] || a == best) continue;
+            if (interrupt && interrupt()) return;
             for (const std::size_t b : adj[best]) {
                 if (!live[b] || b <= a) continue;
                 if (std::find(adj[a].begin(), adj[a].end(), b) == adj[a].end()) {
@@ -631,6 +634,9 @@ void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
         // active range and must never see stale entries from earlier columns.
         y.assign(n, 0.0);
 
+        std::vector<std::size_t> active_pos;
+        active_pos.reserve(64);
+
         // Scatter A[:, col] into y by current position of each physical row.
         for (std::size_t k = col_ptr[col]; k < col_ptr[col + 1]; ++k) {
             const std::size_t p = pos_of[col_row[k]];
@@ -638,6 +644,7 @@ void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
                 queued[p] = stamp;
                 y[p] = 0.0;
                 work.insert(p);
+                active_pos.push_back(p);
             }
             y[p] += col_val[k];
         }
@@ -662,19 +669,22 @@ void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
                     queued[r] = stamp;
                     y[r] = 0.0;
                     work.insert(r);
+                    active_pos.push_back(r);
                 }
                 y[r] -= lvals[q] * yp;
             }
         }
 
-        // Partial pivoting: strict partial order like the reference dense LU.
+        // Partial pivoting: scan active candidate positions to find max magnitude pivot.
         std::size_t piv = col;
         double best = std::abs(y[col]);
-        for (std::size_t p = col + 1; p < n; ++p) {
-            const double v = std::abs(y[p]);
-            if (v > best) {
-                best = v;
-                piv = p;
+        for (std::size_t p : active_pos) {
+            if (p > col) {
+                const double v = std::abs(y[p]);
+                if (v > best) {
+                    best = v;
+                    piv = p;
+                }
             }
         }
 
@@ -1197,7 +1207,7 @@ void SparseCholesky::refactorize(const SparseMatrix& A, const ToleranceConfig& t
 
 void SparseCholesky::symbolic_analysis(const SparseMatrix& A) {
     compute_md_order_and_pattern(A, symbolic_.perm, symbolic_.inv_perm,
-                                 symbolic_.L_row_ptr, symbolic_.L_col_indices);
+                                 symbolic_.L_row_ptr, symbolic_.L_col_indices, interrupt_cb_);
 
     compute_elimination_tree();
     compute_postorder();
@@ -1229,6 +1239,15 @@ void SparseCholesky::numeric_factorization(const SparseMatrix& A) {
     const auto B = permute_symmetric(A, symbolic_.inv_perm);
 
     for (std::size_t i = 0; i < n; ++i) {
+        if ((i & 31u) == 0u && interrupted()) {
+            auto end_time = std::chrono::high_resolution_clock::now();
+            stats_.factorization_time_ms =
+                std::chrono::duration<double, std::milli>(end_time - start_time).count();
+            stats_.nnz_L = nnz_L;
+            stats_.rank = static_cast<int>(i);
+            stats_.singular = true;
+            return;
+        }
         double diag = permuted_value(B, i, i);
 
         for (std::size_t k = symbolic_.L_row_ptr[i]; k < symbolic_.L_row_ptr[i + 1]; ++k) {

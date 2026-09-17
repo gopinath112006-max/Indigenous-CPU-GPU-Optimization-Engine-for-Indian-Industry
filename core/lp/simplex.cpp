@@ -742,6 +742,22 @@ try {
             }
         }
 
+        if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
+            std::size_t n_basic_art = 0;
+            double max_basic_art = 0.0;
+            for (std::size_t i = 0; i < ncons; ++i) {
+                int var = basis_[i];
+                if (var >= 0 && artificial_cols_[static_cast<std::size_t>(var)]) {
+                    ++n_basic_art;
+                    max_basic_art = std::max(max_basic_art, basic_solution_[i]);
+                }
+            }
+            std::cerr << "[simplex-p1] status=" << static_cast<int>(p1_status)
+                      << " art_sum=" << art_sum << " basic_art=" << n_basic_art
+                      << " max_basic_art=" << max_basic_art
+                      << " iters=" << total_iters << "\n";
+        }
+
         if (art_sum > std::max(tol_.feasibility_tol(), 1e-9)) {
             if (p1_status == model::ProblemStatus::OPTIMAL) {
                 result.status = model::ProblemStatus::INFEASIBLE;
@@ -790,6 +806,49 @@ try {
     }
 
     // Phase 2: original objective. Artificial columns are excluded from entry.
+    // Artificial variables still basic at zero after phase 1 must be pivoted out
+    // of the basis: otherwise a phase-2 pivot can drive them positive, which
+    // violates the equality they were introduced for (false "optimal" point that
+    // undercuts the true optimum). Redundant rows (no valid pivot column) are
+    // handled by the blocking ratio test below.
+    if (need_phase1) {
+        std::size_t purged = 0;
+        std::size_t redundant_rows = 0;
+        std::vector<double> col;
+        for (std::size_t i = 0; i < ncons; ++i) {
+            const int bv = basis_[i];
+            if (bv < 0 || !artificial_cols_[static_cast<std::size_t>(bv)]) continue;
+            int chosen = -1;
+            std::vector<double> chosen_dir;
+            for (std::size_t j = 0; j < nvars; ++j) {
+                if (nonbasis_[j] < 0) continue;
+                if (artificial_cols_[j]) continue;
+                col.clear();
+                extract_column(problem_->constraint_matrix, j, col);
+                basis_factorization_->solve(col);
+                if (std::abs(col[i]) > 1e-7) {
+                    chosen = static_cast<int>(j);
+                    chosen_dir = std::move(col);
+                    break;
+                }
+            }
+            if (chosen >= 0) {
+                pivot_direction_ = std::move(chosen_dir);
+                last_leaving_ = static_cast<int>(i);
+                last_entering_ = chosen;
+                pivot(chosen, static_cast<int>(i));
+                update_basis_factorization(static_cast<int>(i), chosen);
+                ++purged;
+            } else {
+                ++redundant_rows;
+            }
+        }
+        if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
+            std::cerr << "[simplex-purge] purged=" << purged
+                      << " redundant=" << redundant_rows << "\n";
+        }
+    }
+
     phase1_active_ = false;
     maximize_ = (problem.obj_sense == model::ObjectiveSense::MAXIMIZE);
     set_phase_costs();
@@ -797,6 +856,24 @@ try {
 
     result.status = run_phase_loop();
     result.iterations = total_iters;
+
+    if (result.status == model::ProblemStatus::OPTIMAL) {
+        // Numerical cleanup: the terminal basis may sit at the end of a long
+        // eta chain whose accumulated round-off inflates the primal/dual
+        // residuals. Rebuild the factorization from scratch and re-derive the
+        // solution before validating, and continue the simplex if the fresh
+        // (more accurate) reduced costs reveal the basis was not yet optimal.
+        iters_since_refactor_ = refactor_frequency_;
+        last_leaving_ = -1;
+        last_entering_ = -1;
+        update_basis_factorization(-1, -1);
+        compute_dual_solution();
+        compute_reduced_costs();
+        if (!check_optimality()) {
+            result.status = run_phase_loop();
+            result.iterations = total_iters;
+        }
+    }
 
     if (result.status == model::ProblemStatus::ITER_LIMIT &&
         result.iterations < static_cast<std::size_t>(options_.max_iterations)) {
@@ -825,33 +902,60 @@ try {
     if (result.status == model::ProblemStatus::OPTIMAL) {
         const auto& A = problem.constraint_matrix;
         bool feasible = true;
+        double max_viol = 0.0;
+        std::size_t viol_row = 0;
         std::size_t ncheck = problem.constraints.size();
+        double global_scale = 1.0;
         for (std::size_t i = 0; i < ncheck; ++i) {
             double activity = 0.0;
+            double rhs = problem.constraints[i].rhs;
+            double row_ref = 1.0 + std::abs(rhs);
             if (A.order() == numerical::StorageOrder::CSR) {
                 for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
                     std::size_t j = A.col_indices()[k];
                     if (j < n_original_vars_) {
                         activity += A.values()[k] * result.primal[j];
+                        row_ref += std::abs(A.values()[k]) *
+                                   std::max(1.0, std::abs(result.primal[j]));
                     }
                 }
             }
-            double rhs = problem.constraints[i].rhs;
+            double vio = 0.0;
             if (problem.constraints[i].sense == model::ConstraintSense::LE) {
-                if (activity > rhs + tol_.feasibility_tol()) feasible = false;
+                vio = activity - rhs;
             } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
-                if (activity < rhs - tol_.feasibility_tol()) feasible = false;
+                vio = rhs - activity;
             } else {
-if (std::abs(activity - rhs) > tol_.feasibility_tol()) feasible = false;
+                vio = std::abs(activity - rhs);
+            }
+            if (vio > tol_.feasibility_tol() * row_ref) feasible = false;
+            if (vio > max_viol) { max_viol = vio; viol_row = i; }
+            global_scale = std::max(global_scale, row_ref);
+            if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
+                std::cerr << "[simplex-viol] row=" << i << " sense=" << static_cast<int>(problem.constraints[i].sense)
+                          << " rhs=" << rhs << " activity=" << activity << " vio=" << vio
+                          << " nnz=" << (A.row_ptr()[i + 1] - A.row_ptr()[i]) << "\n";
             }
         }
         for (std::size_t j = 0; j < n_original_vars_; ++j) {
             double val = result.primal[j];
             double lb = problem.variables[j].lower_bound;
             double ub = problem.variables[j].upper_bound;
-            if (val < lb - tol_.feasibility_tol() || val > ub + tol_.feasibility_tol()) {
-                feasible = false;
+            double vio = std::max(lb - val, val - ub);
+            if (vio > tol_.feasibility_tol() * global_scale) feasible = false;
+            if (vio > max_viol) { max_viol = vio; viol_row = ncheck + j; }
+            if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
+                std::cerr << "[simplex-viol-var] j=" << j
+                          << " name=" << problem.variables[j].name
+                          << " val=" << val << " lb=" << lb << " ub=" << ub
+                          << " vio=" << vio << "\n";
             }
+        }
+        if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
+            std::cerr << "[simplex-p2] status=" << static_cast<int>(result.status)
+                      << " iters=" << total_iters << " feasible=" << feasible
+                      << " max_viol=" << max_viol << " row=" << viol_row
+                      << " nphase2iter=" << (total_iters) << "\n";
         }
         if (!feasible) {
             result.status = model::ProblemStatus::INFEASIBLE;
@@ -891,6 +995,9 @@ if (std::abs(activity - rhs) > tol_.feasibility_tol()) feasible = false;
     result.solve_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
 } catch (const std::exception& e) {
+        if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
+            std::cerr << "[simplex-exception] " << e.what() << "\n";
+        }
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
     }
 
@@ -1100,7 +1207,7 @@ std::vector<std::size_t> SimplexSolver::ranked_candidates(bool maximize) const {
     std::vector<Ranked> ranked;
     for (std::size_t j = 0; j < nvars; ++j) {
         if (nonbasis_[j] < 0) continue;
-        if (artificial_cols_[j]) continue;
+        if (!phase1_active_ && artificial_cols_[j]) continue;
         double rc = reduced_costs_[j];
         if (maximize) rc = -rc;
         if (rc >= -tol_.optimality_tol()) continue;
@@ -1139,7 +1246,7 @@ int SimplexSolver::select_entering_variable() {
     if (options_.bland_rule || perturbed_) {
         for (std::size_t j = 0; j < nvars; ++j) {
             if (nonbasis_[j] < 0) continue;
-            if (artificial_cols_[j]) continue;
+            if (!phase1_active_ && artificial_cols_[j]) continue;
             double rc = reduced_costs_[j];
             if (maximize_) rc = -rc;
             if (rc < -tol_.optimality_tol()) return static_cast<int>(j);
@@ -1183,6 +1290,20 @@ int SimplexSolver::select_leaving_variable(int entering) {
     basis_factorization_->solve(d);
 
     const double ratio_tie_tol = 1e-9;
+    // A basic variable can sit slightly below zero from accumulated round-off.
+    // Such a variable must be allowed to leave (its ratio is clamped to zero)
+    // rather than skipped, otherwise a later pivot drives it arbitrarily
+    // negative. Genuinely infeasible values (well beyond round-off) keep the
+    // historical skip so the primal simplex does not degenerate into a chain of
+    // zero-step pivots on a basis it cannot repair.
+    double basic_mag = 1.0;
+    for (double bv : basic_solution_) basic_mag = std::max(basic_mag, std::abs(bv));
+    const double neg_roundoff_tol = 1e-6 * basic_mag;
+    auto relaxed_ratio = [&](std::size_t i, double aij, double& ratio) -> bool {
+        ratio = basic_solution_[i] / aij;
+        if (ratio >= 0.0) return true;
+        return ratio >= -tol_.feasibility_tol() ? (ratio = 0.0, true) : false;
+    };
     if (options_.ratio_test == RatioTest::HARRIS_TWO_PASS) {
         // Pass 1: smallest ratio, tolerating small primal infeasibility.
         double best_ratio = std::numeric_limits<double>::infinity();
@@ -1192,8 +1313,8 @@ int SimplexSolver::select_leaving_variable(int entering) {
         for (std::size_t i = 0; i < ncons; ++i) {
             const double aij = d[i];
             if (aij <= tol_.pivot_tol()) continue;
-            const double ratio = basic_solution_[i] / aij;
-            if (ratio < -tol_.feasibility_tol()) continue;
+            double ratio;
+            if (!relaxed_ratio(i, aij, ratio)) continue;
             if (ratio < best_ratio) {
                 best_ratio = ratio;
                 best_row = static_cast<int>(i);
@@ -1213,8 +1334,8 @@ int SimplexSolver::select_leaving_variable(int entering) {
         for (std::size_t i = 0; i < ncons; ++i) {
             const double aij = d[i];
             if (aij <= tol_.pivot_tol()) continue;
-            const double ratio = basic_solution_[i] / aij;
-            if (ratio < -tol_.feasibility_tol()) continue;
+            double ratio;
+            if (!relaxed_ratio(i, aij, ratio)) continue;
             if (ratio <= best_ratio + alpha && aij > best_pivot + tol_.zero_tol()) {
                 best_pivot = aij;
                 best_row = static_cast<int>(i);
@@ -1234,8 +1355,8 @@ int SimplexSolver::select_leaving_variable(int entering) {
     for (std::size_t i = 0; i < ncons; ++i) {
         const double aij = d[i];
         if (aij > tol_.pivot_tol()) {
-            const double ratio = basic_solution_[i] / aij;
-            if (ratio < -tol_.feasibility_tol()) continue;
+            double ratio;
+            if (!relaxed_ratio(i, aij, ratio)) continue;
             if (best_row < 0 || ratio < best_ratio - ratio_tie_tol) {
                 best_ratio = ratio;
                 best_row = static_cast<int>(i);
@@ -1358,7 +1479,7 @@ if (eta_ok) {
 bool SimplexSolver::check_optimality() {
     for (std::size_t j = 0; j < reduced_costs_.size(); ++j) {
         if (nonbasis_[j] < 0) continue;
-        if (artificial_cols_[j]) continue;
+        if (!phase1_active_ && artificial_cols_[j]) continue;
         double rc = reduced_costs_[j];
         if (maximize_) rc = -rc;
         if (rc < -tol_.optimality_tol()) {

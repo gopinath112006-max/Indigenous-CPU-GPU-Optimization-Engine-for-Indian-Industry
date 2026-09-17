@@ -570,6 +570,10 @@ TEST(BranchAndBoundTest, NodeSelectionStrategiesAffectExecution) {
         opts.branching.node_strategy = strat;
         opts.cuts.gomory_cuts = false;
         opts.cuts.mir_cuts = false;
+        // Isolate node-selection behavior: a strong primal heuristic can find
+        // the optimum at the root and mask the traversal-order differences.
+        opts.heuristics.rounding = false;
+        opts.heuristics.diving = false;
         BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
         auto result = solver.solve(prob);
         ASSERT_EQ(result.status, ProblemStatus::OPTIMAL) << "strat=" << static_cast<int>(strat);
@@ -601,6 +605,9 @@ TEST(BranchAndBoundTest, HybridDiffersFromBestFirst) {
         opts.branching.node_strategy = strat;
         opts.cuts.gomory_cuts = false;
         opts.cuts.mir_cuts = false;
+        // Isolate node-selection behavior (see NodeSelectionStrategies...).
+        opts.heuristics.rounding = false;
+        opts.heuristics.diving = false;
         BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
         return solver.solve(prob);
     };

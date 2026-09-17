@@ -13,6 +13,7 @@
 #include <validation/diagnostics.hpp>
 #include <chrono>
 #include <memory>
+#include <iostream>
 #include <optional>
 #include <memory>
 #include <iostream>
@@ -165,10 +166,17 @@ lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(dispatch_budget);
                 if (pimpl_->options.engine == EngineType::AUTO &&
                     (result.status == model::ProblemStatus::TIME_LIMIT ||
                      result.status == model::ProblemStatus::ITER_LIMIT ||
-                     result.status == model::ProblemStatus::NUMERICAL_ERROR)) {
+                     result.status == model::ProblemStatus::NUMERICAL_ERROR) &&
+                    (remaining_time > 0.0 || pimpl_->options.time_limit_seconds <= 0.0)) {
                     if (remaining_time > 0.0) {
                         remaining_time -= elapsed_ms();
                         if (remaining_time < 0.0) remaining_time = 0.0;
+                    }
+                    // time_limit_seconds == 0 means "unlimited"; never pass an
+                    // exhausted (0) budget to the fallback when a limit was set,
+                    // or the barrier would run unbounded past the deadline.
+                    if (pimpl_->options.time_limit_seconds > 0.0 && remaining_time <= 0.0) {
+                        remaining_time = 1e-9;
                     }
                     lp::InteriorPointOptions ipm_opts;
                     ipm_opts.time_limit_seconds = remaining_time;
@@ -487,6 +495,9 @@ Problem Problem::from_lp(const std::string& path) {
     model::LPParser parser;
     auto result = parser.parse_file(path);
     if (!result.success) {
+        for (const auto& e : result.errors) {
+            std::cerr << "[LP parse error] " << e << "\n";
+        }
         throw std::runtime_error("Failed to parse LP file: " + path);
     }
     Problem p;

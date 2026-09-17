@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -128,7 +129,8 @@ double max_step(const std::vector<double>& v, const std::vector<double>& d) {
 numerical::SparseMatrix build_normal_equations(
     const numerical::SparseMatrix& M,
     const std::vector<double>& D,
-    double regularization) {
+    double regularization,
+    const std::function<bool()>& interrupt = {}) {
 
     const std::size_t m = M.rows();
     const std::size_t n = M.cols();
@@ -157,9 +159,11 @@ numerical::SparseMatrix build_normal_equations(
 
     std::vector<numerical::Triplet> triplets;
     for (std::size_t j = 0; j < n; ++j) {
+        if (interrupt && (j & 63u) == 0u && interrupt()) break;
         if (D[j] <= 0.0) continue;
         const double d = D[j];
         for (std::size_t p = col_start[j]; p < col_start[j + 1]; ++p) {
+            if (interrupt && interrupt()) return numerical::SparseMatrix::from_triplets(m, m, triplets);
             for (std::size_t q = col_start[j]; q < col_start[j + 1]; ++q) {
                 triplets.emplace_back(crows[p], crows[q], cvals[p] * cvals[q] * d);
             }
@@ -434,6 +438,13 @@ InteriorPointResult InteriorPointSolver::solve(const model::Problem& problem) {
         const std::size_t max_it = static_cast<std::size_t>(options_.max_iterations);
         std::size_t iter = 0;
 
+        auto deadline_passed = [&]() -> bool {
+            if (options_.time_limit_seconds <= 0.0) return false;
+            auto now = std::chrono::high_resolution_clock::now();
+            return std::chrono::duration<double>(now - start_time).count() >=
+                   options_.time_limit_seconds;
+        };
+
         // Reused sparse-Cholesky of the normal equations. The sparsity pattern
         // of N = M^T D M + reg*I only depends on which D[j] are nonzero, so the
         // symbolic analysis (AMD order + elimination tree) is amortized across
@@ -443,6 +454,12 @@ InteriorPointResult InteriorPointSolver::solve(const model::Problem& problem) {
         bool barrier_factored = false;
 
         for (iter = 0; iter < max_it; ++iter) {
+            if (std::getenv("HYPERNOVA_IPM_PROF")) {
+                auto now = std::chrono::high_resolution_clock::now();
+                double el = std::chrono::duration<double>(now - start_time).count();
+                std::cerr << "[ipm] iter=" << iter << " elapsed=" << el
+                          << " n=" << f.n() << " m=" << f.m() << "\n";
+            }
             if (options_.interrupt_callback && options_.interrupt_callback()) {
                 interrupted = true;
                 break;
@@ -486,9 +503,14 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
                 if (!(D[j] >= 0.0) || !std::isfinite(D[j]) || D[j] > 1e16) D[j] = 1e16;
             }
 
-            numerical::SparseMatrix N = build_normal_equations(f.M, D, options_.regularization);
+            numerical::SparseMatrix N = build_normal_equations(f.M, D, options_.regularization,
+                                                               deadline_passed);
+            if (deadline_passed()) { time_up = true; break; }
             const double t_build = phase_ms();
-
+            if (std::getenv("HYPERNOVA_IPM_PROF")) {
+                std::cerr << "[ipm]   normal_eq rows=" << N.rows() << " nnz=" << N.nnz()
+                          << " build_ms=" << t_build << "\n";
+            }
             std::vector<char> active(f.n(), 0);
             for (std::size_t j = 0; j < f.n(); ++j) active[j] = (D[j] > 0.0) ? 1 : 0;
             bool pattern_same = barrier_factored && barrier_active_prev.size() == active.size();
@@ -499,17 +521,30 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
             }
             const double t_pattern = phase_ms() - t_build;
             if (!barrier_factored) {
-                barrier_chol = std::make_unique<numerical::SparseCholesky>(N, tol_);
+                barrier_chol = std::make_unique<numerical::SparseCholesky>();
+                barrier_chol->set_interrupt_callback(deadline_passed);
+                barrier_chol->analyze(N);
+                if (deadline_passed()) { time_up = true; break; }
+                barrier_chol->factorize(N);
                 barrier_factored = true;
             } else if (!pattern_same) {
                 // D's zero pattern changed (columns pinned to bounds) -> the
                 // normal-equation pattern changed, so redo the symbolic analysis.
-                barrier_chol = std::make_unique<numerical::SparseCholesky>(N, tol_);
+                barrier_chol = std::make_unique<numerical::SparseCholesky>();
+                barrier_chol->set_interrupt_callback(deadline_passed);
+                barrier_chol->analyze(N);
+                if (deadline_passed()) { time_up = true; break; }
+                barrier_chol->factorize(N);
             } else {
+                barrier_chol->set_interrupt_callback(deadline_passed);
                 barrier_chol->refactorize(N, tol_);
             }
+            if (deadline_passed()) { time_up = true; break; }
             barrier_active_prev = active;
             const double t_fac1 = phase_ms();
+            if (std::getenv("HYPERNOVA_IPM_PROF")) {
+                std::cerr << "[ipm]   factor_ms=" << (t_fac1 - t_build) << "\n";
+            }
 
             for (std::size_t j = 0; j < f.n(); ++j) tmp_n[j] = D[j] * rd[j];
             std::vector<double> mdrd;

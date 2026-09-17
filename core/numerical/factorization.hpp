@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstddef>
 #include <memory>
+#include <functional>
 #include <optional>
 
 namespace hypernova::numerical {
@@ -52,6 +53,15 @@ public:
     }
     virtual void clear_eta_chain() {}
     virtual std::size_t eta_chain_size() const { return 0; }
+
+    // Cooperative interruption for long-running numeric factorizations. When the
+    // callback is set and returns true, factorization aborts early; the result is
+    // then unusable and the caller must re-check its own deadline/abort state.
+    void set_interrupt_callback(std::function<bool()> cb) { interrupt_cb_ = std::move(cb); }
+
+protected:
+    bool interrupted() const { return interrupt_cb_ && interrupt_cb_(); }
+    std::function<bool()> interrupt_cb_;
 
 private:
     static const std::vector<double> empty_D_;
