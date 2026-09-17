@@ -1,73 +1,170 @@
 name: CI
 
+# master is the primary branch of this repository; main/develop are kept so
+# forks or future renames keep building.
 on:
   push:
-    branches: [main, develop]
+    branches: [master, main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [master, main, develop]
+  workflow_dispatch:
 
-env:
-  CMAKE_BUILD_TYPE: Release
-  CMAKE_CXX_FLAGS: "-Wall -Wextra -Wpedantic -Werror"
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-linux:
+    name: build-linux (gcc)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake g++ libgtest-dev nlohmann-json3-dev
+          sudo apt-get install -y cmake g++
 
+      # GTest and nlohmann/json are fetched by CMake FetchContent (the default
+      # HYPERNOVA_FETCH_GTEST=ON), matching the developer workflow exactly.
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHYPERNOVA_BUILD_TESTS=ON -DHYPERNOVA_BUILD_CLI=ON
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --parallel
 
       - name: Run tests
-        run: |
-          cd build
-          ctest --output-on-failure --parallel
+        run: ctest --test-dir build --output-on-failure -j 2
 
   build-windows:
+    name: build-windows (${{ matrix.toolchain }})
     runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [msvc, mingw]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      # -----------------------------------------------------------------
+      # MinGW entry: use the runner's preinstalled mingw-w64 (install via
+      # choco only as a fallback) and pin its location for later steps.
+      # -----------------------------------------------------------------
+      - name: Locate MinGW toolchain
+        if: matrix.toolchain == 'mingw'
         run: |
-          choco install cmake gtest nlohmann-json --yes
+          $gpp = Get-Command g++ -ErrorAction SilentlyContinue
+          if (-not $gpp) {
+            choco install mingw --yes --no-progress
+            $env:Path = "C:\ProgramData\mingw64\mingw64\bin;$env:Path"
+            $gpp = Get-Command g++
+          }
+          $mingwBin = (Split-Path $gpp.Source)
+          Add-Content $env:GITHUB_ENV "MINGW_BIN_NATIVE=$mingwBin"
+          Write-Host "Using MinGW g++ at $($gpp.Source)"
 
-      - name: Configure CMake
+      - name: Configure CMake (MSVC)
+        if: matrix.toolchain == 'msvc'
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHYPERNOVA_BUILD_TESTS=ON -DHYPERNOVA_BUILD_CLI=ON
 
-      - name: Build
+      - name: Configure CMake (MinGW)
+        if: matrix.toolchain == 'mingw'
+        run: |
+          $env:Path = "$env:MINGW_BIN_NATIVE;$env:Path"
+          cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release `
+            -DHYPERNOVA_BUILD_TESTS=ON -DHYPERNOVA_BUILD_CLI=ON `
+            -DCMAKE_CXX_COMPILER="$env:MINGW_BIN_NATIVE\c++.exe"
+
+      - name: Build (MSVC)
+        if: matrix.toolchain == 'msvc'
         run: cmake --build build --config Release --parallel
 
-      - name: Run tests
+      - name: Build (MinGW)
+        if: matrix.toolchain == 'mingw'
         run: |
-          cd build
-          ctest -C Release --output-on-failure --parallel
+          $env:Path = "$env:MINGW_BIN_NATIVE;$env:Path"
+          cmake --build build --parallel
+
+      # -----------------------------------------------------------------
+      # Runtime-DLL resolution guard.
+      #
+      # A MinGW-built binary loads libstdc++-6.dll / libgcc_s_seh-1.dll /
+      # libwinpthread-1.dll at load time. Windows searches the application
+      # directory BEFORE PATH, so CMakeLists.txt copies the toolchain's
+      # runtime DLLs into build/bin at configure time. Without that pin, the
+      # DLL that loads depends on whatever mingw64\bin appears first on the
+      # user's PATH (e.g. Git for Windows ships an MSVCRT-flavored libstdc++
+      # with a different GCC ABI) -- producing segfaults in std::string/locale
+      # code or STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) with zero output.
+      # This guard fails the build if a MinGW toolchain is in use but the
+      # runtime DLLs were not pinned next to the binaries.
+      # -----------------------------------------------------------------
+      - name: Guard MinGW runtime DLL pinning
+        run: |
+          $cache = Get-Content build/CMakeCache.txt -Raw
+          if ($cache -match '(?im)^CMAKE_CXX_COMPILER:FILEPATH=.*(mingw|g\+\+)') {
+            if (-not (Test-Path build/bin/libstdc++-6.dll)) {
+              throw ("MinGW toolchain in use but libstdc++-6.dll is not pinned in build/bin. " +
+                     "Runtime-DLL resolution would depend on PATH (segfaults / 0xc0000139 " +
+                     "where another mingw64\bin precedes the toolchain). " +
+                     "Check the 'MinGW runtime DLLs' step in CMakeLists.txt.")
+            }
+            Write-Host "OK: MinGW runtime DLLs pinned in build/bin"
+          } else {
+            Write-Host "MSVC toolchain: no MinGW runtime DLLs required"
+          }
+
+      - name: CLI smoke test
+        run: |
+          $out = ./build/bin/hypernova.exe solve test_rt.mps
+          if ($LASTEXITCODE -ne 0) { throw "hypernova.exe exited with $LASTEXITCODE" }
+          if (-not ($out -match 'OPTIMAL')) { throw "CLI smoke test did not report OPTIMAL" }
+          if (-not ($out -match 'Verification: PASS')) { throw "CLI smoke test verification did not PASS" }
+          Write-Host "$out"
+
+      # Reproduce the failure class in CI: with the MinGW toolchain directory
+      # removed from PATH, every binary must still run purely from the DLLs
+      # pinned in build/bin (this is exactly the environment where unpinned
+      # builds segfault or fail with 0xc0000139).
+      - name: Run tests without toolchain on PATH (MinGW)
+        if: matrix.toolchain == 'mingw'
+        run: |
+          $toolchain = $env:MINGW_BIN_NATIVE.TrimEnd('\')
+          $env:Path = ($env:Path -split ';' |
+            Where-Object { $_ -and ($_.TrimEnd('\') -ne $toolchain) }) -join ';'
+          ctest --test-dir build --output-on-failure -j 2
+
+      - name: Run tests (MSVC)
+        if: matrix.toolchain == 'msvc'
+        run: ctest --test-dir build -C Release --output-on-failure -j 2
 
   static-analysis:
+    name: static-analysis (clang-tidy)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
 
+      # Tests are disabled so clang-tidy does not analyze the FetchContent'd
+      # GTest/nlohmann sources (noise + long analysis time).
       - name: Configure CMake with clang-tidy
-        run: cmake -B build -DCMAKE_CXX_CLANG_TIDY=clang-tidy
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHYPERNOVA_BUILD_TESTS=OFF -DCMAKE_CXX_CLANG_TIDY=clang-tidy
 
       - name: Build and analyze
         run: cmake --build build --config Release --parallel
 
   format-check:
+    name: format-check (clang-format)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +176,9 @@ jobs:
           find . -name "*.hpp" -o -name "*.cpp" | xargs clang-format --dry-run --Werror
 
   documentation:
+    name: documentation (doxygen)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

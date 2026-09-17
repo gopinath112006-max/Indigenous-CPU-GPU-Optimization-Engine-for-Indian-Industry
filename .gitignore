@@ -38,6 +38,9 @@ sweep_*.json
 b1.csv
 b1.json
 
+# Scratch / local tool artifacts
+.freebuff/
+
 # Python
 __pycache__/
 *.pyc

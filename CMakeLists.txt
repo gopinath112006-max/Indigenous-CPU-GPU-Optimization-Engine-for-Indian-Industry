@@ -65,6 +65,32 @@ if(HYPERNOVA_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# ---------------------------------------------------------------------------
+# MinGW runtime DLLs: pin the exact libstdc++/libgcc/libwinpthread the
+# toolchain linked against next to the binaries. Windows searches the
+# application directory before PATH, so executables and tests keep loading a
+# matching C++ runtime even when PATH resolves libstdc++-6.dll from another
+# toolchain first (e.g. Git for Windows' own mingw64\bin, which ships an
+# MSVCRT-flavored libstdc++ with a different GCC ABI: mixed-ABI loads crash
+# with segfaults in std::string/locale code or fail with STATUS_ENTRYPOINT_NOT_FOUND
+# (0xc0000139) on symbols the older DLL does not export).
+# ---------------------------------------------------------------------------
+if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    set(HYPERNOVA_RUNTIME_DLLS
+        "${CMAKE_CXX_COMPILER}/../libstdc++-6.dll"
+        "${CMAKE_CXX_COMPILER}/../libgcc_s_seh-1.dll"
+        "${CMAKE_CXX_COMPILER}/../libwinpthread-1.dll"
+    )
+    foreach(dll ${HYPERNOVA_RUNTIME_DLLS})
+        get_filename_component(dll_abs "${dll}" ABSOLUTE)
+        if(EXISTS "${dll_abs}")
+            file(COPY "${dll_abs}" DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        else()
+            message(STATUS "MinGW runtime DLL not found next to compiler, skipping: ${dll_abs}")
+        endif()
+    endforeach()
+endif()
+
 configure_file(
     ${CMAKE_SOURCE_DIR}/cmake/HyperNovaConfig.cmake.in
     ${CMAKE_BINARY_DIR}/HyperNovaConfig.cmake
