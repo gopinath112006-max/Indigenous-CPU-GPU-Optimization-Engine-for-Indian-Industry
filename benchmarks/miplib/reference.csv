@@ -1,0 +1,13 @@
+# MIPLIB benchmark reference solutions.
+# Values are the published optimal objectives for MIPLIB2017 (or MIPLIB benchmark set).
+# name,status,objective
+markshare1,min,1.0
+p0201,min,7615.0
+enlight8,min,27.0
+glass4,min,1200012599.972
+flugpl,min,1201500.0
+mik-250-20-75-4,min,-52301.0
+mas74,min,11801.186
+mas76,min,40005.054
+gen-ip002,min,-4783.733
+enlight_hard,min,37.0

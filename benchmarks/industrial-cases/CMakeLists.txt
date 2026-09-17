@@ -1,3 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Industrial case studies - placeholder
+add_executable(industrial_demo industrial_demo.cpp)
+target_link_libraries(industrial_demo PRIVATE hypernova_api)

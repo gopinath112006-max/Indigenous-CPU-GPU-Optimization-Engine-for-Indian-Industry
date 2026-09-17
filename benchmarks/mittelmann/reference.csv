@@ -1,0 +1,7 @@
+# Mittelmann benchmark reference solutions.
+# agg/fit2p optima verified with HiGHS 1.15.1 (highspy) to full double
+# precision; the runner matches objectives at 1e-6 relative tolerance, so
+# rounded published values would spuriously fail.
+# name,status,objective
+agg,min,-35991767.2865765
+fit2p,min,68464.29329383216

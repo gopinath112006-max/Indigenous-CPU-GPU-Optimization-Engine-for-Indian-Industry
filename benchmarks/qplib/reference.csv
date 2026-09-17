@@ -1,0 +1,11 @@
+# QPLIB benchmark reference solutions.
+# Values are the published best-known objectives from qplib.solu (bestsol).
+# Note: only a subset of QPLIB instances are convex; HyperNova requires convex
+# QPs for the active-set solver.
+# name,status,objective
+QPLIB_10050,min,-25.69766163
+QPLIB_10056,min,-33.856788659
+QPLIB_10069,min,0.0
+QPLIB_3871,min,197.3338812
+QPLIB_3913,min,42.925
+QPLIB_3980,min,6.325
