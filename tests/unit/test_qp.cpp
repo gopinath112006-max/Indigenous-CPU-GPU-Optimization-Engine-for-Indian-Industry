@@ -507,3 +507,171 @@ TEST(QPCrossTermTest, MaximizeObjective) {
     EXPECT_NEAR(as.primal[0], 1.0, 1e-4);
     EXPECT_NEAR(as.primal[1], 1.0, 1e-4);
 }
+
+TEST(GeneralQPValidationTest, SingularPSDMatrix) {
+    // min 0.5*(2*x0^2 + 4*x0*x1 + 2*x1^2) - 4*x0 - 4*x1 = (x0+x1-2)^2 - 4
+    // Rank 1 singular PSD matrix Q = [[2, 2], [2, 2]]
+    // Minimum objective = -4.0, achieved along the line x0 + x1 = 2.
+    ProblemBuilder builder("singular_psd");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, -4.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    builder.add_quadratic_term(0, 1, 2.0);
+    Problem prob = builder.build();
+
+    ActiveSetQPSolver solver;
+    auto result = solver.solve(prob);
+
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.objective_value, -4.0, 1e-4);
+    EXPECT_NEAR(result.primal[0] + result.primal[1], 2.0, 1e-4);
+}
+
+TEST(GeneralQPValidationTest, IllConditionedMatrix) {
+    // min 0.5*(1e6*x0^2 + 1e-2*x1^2) - 1e6*x0 - x1
+    // Condition number ~ 1e8
+    // Unconstrained optimum: x0 = 1.0, x1 = 100.0, objective = -500050.0
+    ProblemBuilder builder("ill_conditioned");
+    builder.add_variable(0.0, 1000.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 1000.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -1e6}, {1, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1e6);
+    builder.add_quadratic_term(1, 1, 1e-2);
+    Problem prob = builder.build();
+
+    ActiveSetQPSolver solver;
+    auto result = solver.solve(prob);
+
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-3);
+    EXPECT_NEAR(result.primal[1], 100.0, 1e-1);
+    EXPECT_NEAR(result.objective_value, -500050.0, 1e-1);
+}
+
+TEST(GeneralQPValidationTest, DenseQMatrix) {
+    // 4-var fully dense positive definite Q matrix
+    // Q_ii = 4, Q_ij = 1 (i != j)
+    // min 0.5 * x^T Q x - e^T x
+    // Solution: x_i = 1/7 (~0.142857), obj = -2/7 (~ -0.285714)
+    ProblemBuilder builder("dense_q");
+    for (int i = 0; i < 4; ++i) {
+        builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x" + std::to_string(i));
+    }
+    builder.set_objective({{0, -1.0}, {1, -1.0}, {2, -1.0}, {3, -1.0}}, ObjectiveSense::MINIMIZE);
+    for (int i = 0; i < 4; ++i) {
+        builder.add_quadratic_term(i, i, 4.0);
+        for (int j = i + 1; j < 4; ++j) {
+            builder.add_quadratic_term(i, j, 1.0);
+        }
+    }
+    Problem prob = builder.build();
+
+    ActiveSetQPSolver solver;
+    auto result = solver.solve(prob);
+
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    const double expected_val = 1.0 / 7.0;
+    const double expected_obj = -2.0 / 7.0;
+    for (int i = 0; i < 4; ++i) {
+        EXPECT_NEAR(result.primal[i], expected_val, 1e-4);
+    }
+    EXPECT_NEAR(result.objective_value, expected_obj, 1e-4);
+}
+
+TEST(GeneralQPValidationTest, FreeVariablesUnbounded) {
+    // min x0^2 + 2*x1^2 - 4*x0 + 8*x1 (x0 stored diag 2.0, x1 stored diag 4.0)
+    // x0 in [-1000, 1000], x1 in [-1000, 1000]
+    // Optimum: x0 = 2.0, x1 = -2.0, obj = -12.0
+    ProblemBuilder builder("free_vars");
+    builder.add_variable(-1000.0, 1000.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(-1000.0, 1000.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, 8.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 4.0);
+    Problem prob = builder.build();
+
+    ActiveSetQPSolver solver;
+    auto result = solver.solve(prob);
+
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], -2.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -12.0, 1e-4);
+}
+
+TEST(MIQPTest, MixedContinuousBinaryInteger) {
+    // min x0^2 + 2*x1^2 + 3*x2^2 - 4*x0 - 3*x1 - 6*x2
+    // x0 continuous in [0, 5], x1 binary in {0, 1}, x2 integer in [0, 4]
+    // s.t. x0 + x1 + x2 <= 3.0
+    ProblemBuilder builder("miqp_mixed");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x1");
+    builder.add_variable(0.0, 4.0, VarType::INTEGER, "x2");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}, {2, 1.0}}, ConstraintSense::LE, 3.0, "budget");
+    builder.set_objective({{0, -4.0}, {1, -3.0}, {2, -6.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 4.0);
+    builder.add_quadratic_term(2, 2, 6.0);
+    Problem prob = builder.build();
+    EXPECT_TRUE(prob.is_miqp());
+
+    BranchAndBoundOptions opts;
+    opts.qp_relaxation = true;
+    opts.qp_relaxation_solver = QpRelaxationSolver::ACTIVE_SET;
+    opts.mip_gap_tolerance = 1e-6;
+
+    BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
+    auto result = solver.solve(prob);
+
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_TRUE(result.primal[1] == 0.0 || result.primal[1] == 1.0);
+    EXPECT_NEAR(result.primal[2], std::round(result.primal[2]), 1e-4);
+    EXPECT_LE(result.primal[0] + result.primal[1] + result.primal[2], 3.0 + 1e-4);
+}
+
+TEST(MIQPTest, InfeasibleMIQP) {
+    // Integer variables with impossible constraint
+    // x0, x1 integer in [0, 2], x0 + x1 >= 10.0
+    ProblemBuilder builder("miqp_infeasible");
+    builder.add_variable(0.0, 2.0, VarType::INTEGER, "x0");
+    builder.add_variable(0.0, 2.0, VarType::INTEGER, "x1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::GE, 10.0, "impossible");
+    builder.set_objective({{0, 1.0}, {1, 1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    BranchAndBoundOptions opts;
+    opts.qp_relaxation = true;
+    opts.qp_relaxation_solver = QpRelaxationSolver::ACTIVE_SET;
+
+    BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
+    auto result = solver.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::INFEASIBLE);
+}
+
+TEST(MIQPTest, NodeLimitedMIQP) {
+    // Multi-variable MIQP forced to stop after 1 node
+    Problem prob = buildCrossTermQP();
+    // Convert variables to integer
+    prob.variables[0].type = VarType::INTEGER;
+    prob.variables[1].type = VarType::INTEGER;
+    EXPECT_TRUE(prob.is_miqp());
+
+    BranchAndBoundOptions opts;
+    opts.qp_relaxation = true;
+    opts.qp_relaxation_solver = QpRelaxationSolver::ACTIVE_SET;
+    opts.node_limit = 1;
+
+    BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
+    auto result = solver.solve(prob);
+
+    EXPECT_TRUE(result.status == ProblemStatus::ITER_LIMIT ||
+                result.status == ProblemStatus::SUBOPTIMAL ||
+                result.status == ProblemStatus::OPTIMAL ||
+                result.status == ProblemStatus::UNKNOWN);
+    EXPECT_LE(result.nodes_explored, 1u);
+}

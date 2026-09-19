@@ -281,11 +281,8 @@ int InteractiveSession::collect_solver_options() {
 int InteractiveSession::solve_and_display() {
     prompt_.print_section("Solving");
 
-    std::cerr << "[DEBUG] solve_and_display: session_.constraints.size() = " << session_.constraints.size() << std::endl;
     model::Problem problem = build_problem();
 
-    std::cerr << "[DEBUG] solve_and_display: problem.constraints.size() = " << problem.constraints.size() << std::endl;
-    std::cerr << "[DEBUG] solve_and_display: problem.variables.size() = " << problem.variables.size() << std::endl;
     prompt_.print_info("Variables: " + std::to_string(problem.variables.size()));
     prompt_.print_info("Constraints: " + std::to_string(problem.constraints.size()));
     prompt_.print_info("Integer variables: " + std::to_string(problem.num_integer_vars()));
@@ -310,12 +307,10 @@ int InteractiveSession::solve_and_display() {
 
     hypernova::Solver solver(solver_opts);
 
-    std::cerr << "[DEBUG] solve_and_display: Calling solver.solve()" << std::endl;
     try {
         auto start = std::chrono::high_resolution_clock::now();
         hypernova::Solution solution = solver.solve(problem);
         auto end = std::chrono::high_resolution_clock::now();
-        std::cerr << "[DEBUG] solve_and_display: solver.solve() returned, status = " << static_cast<int>(solution.status) << std::endl;
 
         double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
 

@@ -79,7 +79,7 @@ SimplexResult SimplexSolver::solve(const model::Problem& problem) {
     return result;
 }
 
-SimplexResult SimplexSolver::solve_with_basis(const model::Problem& problem, const std::vector<int>& var_status) {
+SimplexResult SimplexSolver::solve_with_basis(const model::Problem& problem, const std::vector<int>& var_status, const std::vector<int>& constraint_status) {
     std::vector<int> var_map(problem.variables.size(), 0);
     std::vector<double> fixed_vals(problem.variables.size(), 0.0);
     model::Problem reduced = eliminate_fixed_variables(problem, var_map, fixed_vals);
@@ -96,7 +96,7 @@ SimplexResult SimplexSolver::solve_with_basis(const model::Problem& problem, con
             reduced_status.clear();
         }
     }
-    SimplexResult result = solve_impl(reduced, reduced_status.empty() ? nullptr : &reduced_status);
+    SimplexResult result = solve_impl(reduced, reduced_status.empty() ? nullptr : &reduced_status, constraint_status.empty() ? nullptr : &constraint_status);
     bool needs_map = false;
     for (std::size_t j = 0; j < var_map.size(); ++j) {
         if (var_map[j] != static_cast<int>(j)) {
@@ -204,7 +204,7 @@ model::Problem SimplexSolver::eliminate_fixed_variables(const model::Problem& pr
     return builder.build();
 }
 
-SimplexResult SimplexSolver::solve_impl(const model::Problem& problem, const std::vector<int>* warm_var_status) {
+SimplexResult SimplexSolver::solve_impl(const model::Problem& problem, const std::vector<int>* warm_var_status, const std::vector<int>* warm_con_status) {
     auto start_time = std::chrono::high_resolution_clock::now();
     solve_start_time_ = start_time;
 
@@ -595,7 +595,7 @@ try {
     }
 
     if (warm_var_status && warm_var_status->size() == problem_->variables.size()) {
-        initialize_basis_with_warm_start(*problem_, *warm_var_status);
+        initialize_basis_with_warm_start(*problem_, *warm_var_status, warm_con_status);
     } else {
         initialize_basis(*problem_);
     }
@@ -1056,7 +1056,8 @@ void SimplexSolver::initialize_basis(const model::Problem& problem) {
 }
 
 void SimplexSolver::initialize_basis_with_warm_start(const model::Problem& problem,
-                                                      const std::vector<int>& var_status) {
+                                                      const std::vector<int>& var_status,
+                                                      const std::vector<int>* con_status) {
     std::size_t nvars = problem.variables.size();
     std::size_t ncons = problem.constraints.size();
 
@@ -1066,19 +1067,36 @@ void SimplexSolver::initialize_basis_with_warm_start(const model::Problem& probl
     dual_solution_.assign(ncons, 0.0);
     reduced_costs_.assign(nvars, 0.0);
 
+    std::vector<char> used(nvars, 0);
+
+    if (con_status && con_status->size() == ncons) {
+        for (std::size_t i = 0; i < ncons; ++i) {
+            if ((*con_status)[i] == 1) { // 1 means basic
+                int v = row_basis_var_[i];
+                if (v >= 0 && static_cast<std::size_t>(v) < nvars) {
+                    basis_[i] = v;
+                    used[static_cast<std::size_t>(v)] = 1;
+                }
+            }
+        }
+    }
+
     std::vector<std::size_t> basic_candidates;
     for (std::size_t j = 0; j < nvars; ++j) {
-        if (var_status[j] == 0) {
+        if (var_status[j] == 1) {
+            basic_candidates.push_back(j);
+        } else if (var_status[j] == 0 && con_status == nullptr) {
             basic_candidates.push_back(j);
         }
     }
 
-    std::vector<char> used(nvars, 0);
-    for (std::size_t i = 0; i < ncons && i < basic_candidates.size(); ++i) {
-        std::size_t v = basic_candidates[i];
-        if (!used[v]) {
-            basis_[i] = static_cast<int>(v);
-            used[v] = 1;
+    for (std::size_t i = 0, cand_idx = 0; i < ncons && cand_idx < basic_candidates.size(); ++i) {
+        if (basis_[i] < 0) {
+            std::size_t v = basic_candidates[cand_idx++];
+            if (!used[v]) {
+                basis_[i] = static_cast<int>(v);
+                used[v] = 1;
+            }
         }
     }
 
@@ -1296,9 +1314,6 @@ int SimplexSolver::select_leaving_variable(int entering) {
     // negative. Genuinely infeasible values (well beyond round-off) keep the
     // historical skip so the primal simplex does not degenerate into a chain of
     // zero-step pivots on a basis it cannot repair.
-    double basic_mag = 1.0;
-    for (double bv : basic_solution_) basic_mag = std::max(basic_mag, std::abs(bv));
-    const double neg_roundoff_tol = 1e-6 * basic_mag;
     auto relaxed_ratio = [&](std::size_t i, double aij, double& ratio) -> bool {
         ratio = basic_solution_[i] / aij;
         if (ratio >= 0.0) return true;

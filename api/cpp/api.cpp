@@ -11,6 +11,8 @@
 #include <validation/iis.hpp>
 #include <validation/solve_report.hpp>
 #include <validation/diagnostics.hpp>
+#include <execution/gpu_backend.hpp>
+#include <numerical/scaling.hpp>
 #include <chrono>
 #include <memory>
 #include <iostream>
@@ -71,7 +73,12 @@ Solver::~Solver() = default;
 
 Solution Solver::solve(const model::Problem& problem) {
     auto global_start = std::chrono::high_resolution_clock::now();
-    pimpl_->interrupted_ = false;
+    if (pimpl_->interrupted_) {
+        pimpl_->interrupted_ = false;
+        Solution solution;
+        solution.status = model::ProblemStatus::INTERRUPTED;
+        return solution;
+    }
 
     Solution solution;
 
@@ -97,6 +104,15 @@ auto recompute_objective = [&](const std::vector<double>& primal) {
     };
 
     double remaining_time = pimpl_->options.time_limit_seconds;
+    
+    std::shared_ptr<execution::IComputeBackend> compute_backend;
+    if (!pimpl_->options.use_gpu || pimpl_->options.compute_target == ComputeTarget::CPU_ONLY) {
+        compute_backend = execution::ComputeBackendFactory::create_backend(execution::ComputeBackendType::CPU);
+    } else if (pimpl_->options.compute_target == ComputeTarget::CPU_GPU_FORCE) {
+        compute_backend = execution::ComputeBackendFactory::create_backend(execution::ComputeBackendType::CUDA);
+    } else {
+        compute_backend = execution::ComputeBackendFactory::create_backend(execution::ComputeBackendType::AUTO);
+    }
 
     const model::Problem* solve_problem = &problem;
     std::unique_ptr<presolve::Presolver> presolver;
@@ -129,6 +145,7 @@ auto solve_dispatch = [&](const model::Problem& target) {
                 lp::InteriorPointOptions ipm_opts;
                 ipm_opts.time_limit_seconds = dispatch_budget;
                 ipm_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
+                ipm_opts.compute_backend = compute_backend;
                 lp::InteriorPointSolver ipm_solver(pimpl_->options.tolerances, ipm_opts);
                 auto result = ipm_solver.solve(target);
                 if (presolved_solution &&
@@ -181,6 +198,7 @@ lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(dispatch_budget);
                     lp::InteriorPointOptions ipm_opts;
                     ipm_opts.time_limit_seconds = remaining_time;
                     ipm_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
+                    ipm_opts.compute_backend = compute_backend;
                     lp::InteriorPointSolver ipm_solver(pimpl_->options.tolerances, ipm_opts);
                     auto ipm_result = ipm_solver.solve(target);
                     if (ipm_result.status == model::ProblemStatus::OPTIMAL) {
@@ -221,6 +239,9 @@ lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(dispatch_budget);
             bb_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
             bb_opts.mip_gap_tolerance = pimpl_->options.mip_gap_tolerance;
             bb_opts.threads = pimpl_->options.thread_count;
+            bb_opts.use_gpu = pimpl_->options.use_gpu;
+            if (pimpl_->options.node_limit > 0) bb_opts.node_limit = static_cast<int>(pimpl_->options.node_limit);
+            if (pimpl_->options.solution_limit > 0) bb_opts.solution_limit = static_cast<int>(pimpl_->options.solution_limit);
             bb_opts.branching.node_strategy = node_selection_strategy(pimpl_->options.node_selection);
             bb_opts.branching.strategy = branching_strategy(pimpl_->options.branching);
             bb_opts.heuristics.feasibility_pump = pimpl_->options.heuristic_feasibility_pump;
@@ -255,6 +276,9 @@ solution.status = result.status;
             bb_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
             bb_opts.mip_gap_tolerance = pimpl_->options.mip_gap_tolerance;
             bb_opts.threads = pimpl_->options.thread_count;
+            bb_opts.use_gpu = pimpl_->options.use_gpu;
+            if (pimpl_->options.node_limit > 0) bb_opts.node_limit = static_cast<int>(pimpl_->options.node_limit);
+            if (pimpl_->options.solution_limit > 0) bb_opts.solution_limit = static_cast<int>(pimpl_->options.solution_limit);
             bb_opts.branching.node_strategy = node_selection_strategy(pimpl_->options.node_selection);
             bb_opts.branching.strategy = branching_strategy(pimpl_->options.branching);
             bb_opts.heuristics.feasibility_pump = pimpl_->options.heuristic_feasibility_pump;
@@ -340,7 +364,49 @@ presolve::PresolveOptions popts;
         solve_problem = &reduced;
     }
 
-solve_dispatch(*solve_problem);
+    numerical::ScalingMethod scale_method = numerical::ScalingMethod::NONE;
+    if (pimpl_->options.scaling == ScalingMethod::GEOMETRIC) {
+        scale_method = numerical::ScalingMethod::GEOMETRIC;
+    } else if (pimpl_->options.scaling == ScalingMethod::CURTIS_REID) {
+        scale_method = numerical::ScalingMethod::CURTIS_REID;
+    }
+
+    std::optional<numerical::ScalingResult> scaling_result;
+    std::optional<model::Problem> scaled_problem_holder;
+    if (scale_method != numerical::ScalingMethod::NONE && solve_problem->constraint_matrix.nnz() > 0) {
+        numerical::MatrixScaler scaler(scale_method);
+        scaling_result = scaler.compute_scales(solve_problem->constraint_matrix);
+        scaled_problem_holder = *solve_problem;
+        std::vector<double> rhs(scaled_problem_holder->constraints.size());
+        for (std::size_t i = 0; i < rhs.size(); ++i) rhs[i] = scaled_problem_holder->constraints[i].rhs;
+        std::vector<double> obj(scaled_problem_holder->variables.size());
+        for (std::size_t j = 0; j < obj.size(); ++j) obj[j] = scaled_problem_holder->variables[j].objective_coeff;
+        std::vector<double> lb(scaled_problem_holder->variables.size());
+        for (std::size_t j = 0; j < lb.size(); ++j) lb[j] = scaled_problem_holder->variables[j].lower_bound;
+        std::vector<double> ub(scaled_problem_holder->variables.size());
+        for (std::size_t j = 0; j < ub.size(); ++j) ub[j] = scaled_problem_holder->variables[j].upper_bound;
+
+        scaler.apply_scales(scaled_problem_holder->constraint_matrix, rhs, obj, lb, ub, *scaling_result);
+        for (std::size_t i = 0; i < rhs.size(); ++i) scaled_problem_holder->constraints[i].rhs = rhs[i];
+        for (std::size_t j = 0; j < obj.size(); ++j) {
+            scaled_problem_holder->variables[j].objective_coeff = obj[j];
+            scaled_problem_holder->variables[j].lower_bound = lb[j];
+            scaled_problem_holder->variables[j].upper_bound = ub[j];
+        }
+        solve_problem = &(*scaled_problem_holder);
+    }
+
+    if (compute_backend && compute_backend->type() == execution::ComputeBackendType::AUTO) {
+        compute_backend->initialize();
+    }
+
+    solve_dispatch(*solve_problem);
+
+    if (scaling_result && !solution.primal.empty()) {
+        numerical::MatrixScaler scaler(scale_method);
+        scaler.unscale_solution(*scaling_result, solution.primal, solution.dual);
+        solution.objective_value = recompute_objective(solution.primal);
+    }
     if (std::getenv("HYPERNOVA_API_DBG")) {
         std::cerr << "API dispatch1 status=" << static_cast<int>(solution.status)
                   << " obj=" << solution.objective_value
@@ -412,6 +478,26 @@ solve_dispatch(*solve_problem);
         }
     }
 
+    if (!pimpl_->options.use_gpu || pimpl_->options.compute_target == ComputeTarget::CPU_ONLY) {
+        solution.backend_used = "cpu (GPU disabled)";
+    } else if (compute_backend && compute_backend->was_gpu_kernel_executed()) {
+        solution.backend_used = "cuda (PTX SpMV kernel executed)";
+    } else if (pimpl_->options.compute_target == ComputeTarget::CPU_GPU_FORCE) {
+        auto avail = execution::ComputeBackendFactory::available_backends();
+        bool has_cuda = false;
+        for (auto b : avail) {
+            if (b == execution::ComputeBackendType::CUDA) has_cuda = true;
+        }
+        solution.backend_used = has_cuda ? "cuda (forced)" : "cpu (cuda forced but unavailable - fallback)";
+    } else {
+        auto avail = execution::ComputeBackendFactory::available_backends();
+        bool has_cuda = false;
+        for (auto b : avail) {
+            if (b == execution::ComputeBackendType::CUDA) has_cuda = true;
+        }
+        solution.backend_used = has_cuda ? "cpu (cost model selected CPU for matrix size)" : "cpu (cuda unavailable)";
+    }
+
     return solution;
 }
 
@@ -425,11 +511,15 @@ Solution Solver::warm_solve(const model::Problem& problem, const Basis& start_ba
     if (start_basis.var_status.size() == problem.variables.size()) {
         var_status = start_basis.var_status;
     }
+    std::vector<int> con_status;
+    if (start_basis.con_status.size() == problem.constraints.size()) {
+        con_status = start_basis.con_status;
+    }
 
     if (problem.is_lp()) {
-lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(pimpl_->options.time_limit_seconds);
+        lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(pimpl_->options.time_limit_seconds);
         lp::SimplexSolver simplex_solver(pimpl_->options.tolerances, simplex_opts);
-        auto result = simplex_solver.solve_with_basis(problem, var_status);
+        auto result = simplex_solver.solve_with_basis(problem, var_status, con_status);
         solution.status = result.status;
         solution.objective_value = result.objective_value;
         solution.primal = std::move(result.primal);

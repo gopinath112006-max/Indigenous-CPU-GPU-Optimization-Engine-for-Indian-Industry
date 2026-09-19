@@ -2,6 +2,7 @@
 #include <model/problem.hpp>
 #include <model/mps_parser.hpp>
 #include <model/lp_parser.hpp>
+#include <model/problem_json.hpp>
 
 using namespace hypernova::model;
 
@@ -248,13 +249,13 @@ End
     EXPECT_TRUE(result.problem.is_qp());
 
     // Trailing coefficients ("x * y value", the write_lp format) must be
-    // parsed, not dropped: `x1 * x1 2` is 2.0*x1^2 and `x1 * x2 1` is 1.0*x1*x2.
+    // parsed, not dropped: `x1 * x1 2` is 2.0*x1^2 (stored Q11 = 4.0) and `x1 * x2 1` is 1.0*x1*x2.
     double q11 = 0.0, q12 = 0.0;
     for (const auto& t : result.problem.quadratic_terms) {
         if (t.row == 0 && t.col == 0) q11 = t.coeff;
         if (t.row == 0 && t.col == 1) q12 = t.coeff;
     }
-    EXPECT_DOUBLE_EQ(q11, 2.0);
+    EXPECT_DOUBLE_EQ(q11, 4.0);
     EXPECT_DOUBLE_EQ(q12, 1.0);
 }
 
@@ -287,6 +288,106 @@ End
         }
         return 0.0;
     };
-    EXPECT_DOUBLE_EQ(coeff_of(0), 2.0);
-    EXPECT_DOUBLE_EQ(coeff_of(1), 3.0);
+    EXPECT_DOUBLE_EQ(coeff_of(0), 4.0);
+    EXPECT_DOUBLE_EQ(coeff_of(1), 6.0);
+}
+
+TEST(JSONFidelityTest, RoundTripStructuralEquality) {
+    std::string mps_content = R"(
+NAME          JSON_TEST
+ROWS
+ N  OBJ
+ L  C1
+ G  C2
+ E  C3
+COLUMNS
+    MARK0000  'MARKER'                 'INTORG'
+    X1        OBJ        1.0       C1        1.0       C2        2.0
+    MARK0001  'MARKER'                 'INTEND'
+    X2        OBJ        2.5       C1        3.0       C3        1.5
+RHS
+    RHS1      C1        10.0      C2        5.0       C3        7.0
+BOUNDS
+ UP BND       X1        10.0
+ BV BND       X2
+QUADOBJ
+    X1        X1        2.0
+    X1        X2        0.5
+ENDATA
+)";
+
+    MPSParser parser;
+    auto result = parser.parse_string(mps_content);
+    ASSERT_TRUE(result.success);
+
+    Problem orig_prob = result.problem;
+    orig_prob.obj_offset = 12.5;
+
+    // Add SOS constraint to test full schema fidelity
+    SOS sos;
+    sos.name = "sos_group_1";
+    sos.type = SOS::Type::SOS1;
+    sos.variable_indices = {0, 1};
+    sos.weights = {1.0, 2.0};
+    orig_prob.sos_constraints.push_back(sos);
+
+    // Serialize MPS -> Problem -> JSON
+    nlohmann::json json_doc = problem_to_json(orig_prob);
+
+    // Verify key JSON fields are populated
+    EXPECT_EQ(json_doc["name"], "JSON_TEST");
+    EXPECT_EQ(json_doc["variables"].size(), 2);
+    EXPECT_EQ(json_doc["constraints"].size(), 3);
+    EXPECT_EQ(json_doc["quadratic_terms"].size(), 2);
+    EXPECT_EQ(json_doc["sos_constraints"].size(), 1);
+
+    // Deserialize JSON -> Problem
+    Problem restored_prob = problem_from_json(json_doc);
+
+    // Verify structural equality
+    EXPECT_EQ(restored_prob.name, orig_prob.name);
+    EXPECT_EQ(restored_prob.obj_sense, orig_prob.obj_sense);
+    EXPECT_DOUBLE_EQ(restored_prob.obj_offset, orig_prob.obj_offset);
+
+    // Variables
+    ASSERT_EQ(restored_prob.variables.size(), orig_prob.variables.size());
+    for (size_t i = 0; i < orig_prob.variables.size(); ++i) {
+        EXPECT_EQ(restored_prob.variables[i].name, orig_prob.variables[i].name);
+        EXPECT_EQ(restored_prob.variables[i].type, orig_prob.variables[i].type);
+        EXPECT_DOUBLE_EQ(restored_prob.variables[i].lower_bound, orig_prob.variables[i].lower_bound);
+        EXPECT_DOUBLE_EQ(restored_prob.variables[i].upper_bound, orig_prob.variables[i].upper_bound);
+        EXPECT_DOUBLE_EQ(restored_prob.variables[i].objective_coeff, orig_prob.variables[i].objective_coeff);
+    }
+
+    // Constraints
+    ASSERT_EQ(restored_prob.constraints.size(), orig_prob.constraints.size());
+    for (size_t i = 0; i < orig_prob.constraints.size(); ++i) {
+        EXPECT_EQ(restored_prob.constraints[i].name, orig_prob.constraints[i].name);
+        EXPECT_EQ(restored_prob.constraints[i].sense, orig_prob.constraints[i].sense);
+        EXPECT_DOUBLE_EQ(restored_prob.constraints[i].rhs, orig_prob.constraints[i].rhs);
+    }
+
+    // Matrix values
+    const auto& A_orig = orig_prob.constraint_matrix;
+    const auto& A_rest = restored_prob.constraint_matrix;
+    EXPECT_EQ(A_rest.rows(), A_orig.rows());
+    EXPECT_EQ(A_rest.cols(), A_orig.cols());
+    EXPECT_EQ(A_rest.row_ptr(), A_orig.row_ptr());
+    EXPECT_EQ(A_rest.col_indices(), A_orig.col_indices());
+    EXPECT_EQ(A_rest.values(), A_orig.values());
+
+    // Quadratic terms
+    ASSERT_EQ(restored_prob.quadratic_terms.size(), orig_prob.quadratic_terms.size());
+    for (size_t i = 0; i < orig_prob.quadratic_terms.size(); ++i) {
+        EXPECT_EQ(restored_prob.quadratic_terms[i].row, orig_prob.quadratic_terms[i].row);
+        EXPECT_EQ(restored_prob.quadratic_terms[i].col, orig_prob.quadratic_terms[i].col);
+        EXPECT_DOUBLE_EQ(restored_prob.quadratic_terms[i].coeff, orig_prob.quadratic_terms[i].coeff);
+    }
+
+    // SOS
+    ASSERT_EQ(restored_prob.sos_constraints.size(), orig_prob.sos_constraints.size());
+    EXPECT_EQ(restored_prob.sos_constraints[0].name, orig_prob.sos_constraints[0].name);
+    EXPECT_EQ(restored_prob.sos_constraints[0].type, orig_prob.sos_constraints[0].type);
+    EXPECT_EQ(restored_prob.sos_constraints[0].variable_indices, orig_prob.sos_constraints[0].variable_indices);
+    EXPECT_EQ(restored_prob.sos_constraints[0].weights, orig_prob.sos_constraints[0].weights);
 }

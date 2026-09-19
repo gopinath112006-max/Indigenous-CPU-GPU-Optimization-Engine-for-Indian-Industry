@@ -40,6 +40,10 @@ public:
 
     virtual std::size_t device_memory() const = 0;
     virtual std::size_t free_memory() const = 0;
+
+    virtual bool was_gpu_kernel_executed() const { return false; }
+    virtual std::size_t gpu_kernel_executions() const { return 0; }
+    virtual void reset_execution_stats() {}
 };
 
 class ComputeBackendFactory {
@@ -67,7 +71,8 @@ public:
                             const std::vector<std::size_t>& row_ptr,
                             std::size_t nrows,
                             std::size_t ncols,
-                            int batch_size = 1);
+                            int batch_size = 1,
+                            bool force_gpu = false);
 
     // Injects device parameters measured at runtime (a calibrated CUDA
     // backend feeds these into AutoBackend at initialization). Values <= 0

@@ -44,4 +44,9 @@ if(HYPERNOVA_BUILD_TESTS)
     add_subdirectory(industrial-cases)
     add_subdirectory(generated)
     add_subdirectory(tests)
+
+    add_custom_target(bench_all
+        DEPENDS bench_netlib bench_miplib bench_qplib bench_mittelmann bench_industrial
+        COMMENT "Runs all HyperNova benchmark suites (Netlib, MIPLIB, QPLIB, Mittelmann, Industrial)"
+    )
 endif()

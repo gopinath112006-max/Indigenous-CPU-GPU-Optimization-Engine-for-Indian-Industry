@@ -1,0 +1,8 @@
+# Industrial MRPL benchmark reference solutions.
+# Values are derived from MRPL refinery process optimization models.
+# name,status,objective
+crude_blending_qp,min,28590.60
+refinery_production_planning_milp,max,2137300.0
+logistics_freight_milp,min,7690.0
+cogen_power_milp,min,5420.0
+hydrogen_network_lp,min,69.96

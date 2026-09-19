@@ -518,6 +518,68 @@ single LP solve dominates the total time, the parallel B&B will show modest
 speedup until the node count is large enough for multiple workers to overlap.
 This is honest and documented rather than hidden.
 
+## Phase 8 (Benchmark Data & Honest MIPLIB Baseline)
+
+Shipped real benchmark data with reference objectives and an opt-in benchmark
+harness, and fixed a correctness bug it surfaced.
+
+### Correctness fix: negative basic variable / false INFEASIBLE (mas74, mas76)
+
+The primal simplex ratio test skipped rows whose basic value was negative
+(`ratio < -feasibility_tol`). A basic variable sitting a few ulps below zero from
+round-off was therefore never allowed to leave, and a later pivot drove it
+arbitrarily negative (observed `x1 = -45.5` on the `mas74` LP relaxation). The
+phase-2 collapse then marked the instance `INFEASIBLE` even though the relaxation
+is feasible.
+
+- `core/lp/simplex.cpp::select_leaving_variable`: ratios for **round-off-level**
+  negative basics are clamped to zero (so the variable leaves immediately). The
+  clamp is a relative judgement on the variable's own value
+  (`b >= -1e-6*(1+|b|)`); genuinely infeasible basics keep the historical skip so
+  the primal method does not degenerate into zero-step pivots.
+- Terminal **basis refactorization cleanup**: after phase 2 reports OPTIMAL the
+  factorization is rebuilt from scratch and the duals/reduced costs re-derived
+  before validation (and phase 2 resumes if the refreshed reduced costs show the
+  basis was not yet optimal). This removes long eta-chain round-off from the
+  reported primal/dual solution.
+- **Scale-relative feasibility** in the simplex terminal check and in
+  `core/validation/solution_verifier.cpp`: constraint residuals are judged
+  against the row's own data magnitude (`1 + |rhs| + Σ|a_ij||x_j|`), bound
+  residuals against the column magnitude, and complementarity as a dimensionless
+  product (`(|slack|/row_scale)·(|dual|/max(1,|dual|))`). Large-coefficient
+  instances are no longer flagged for numerically negligible absolute residuals.
+- Result: `mas74`/`mas76` no longer return `INFEASIBLE`; the LP relaxation of
+  `mas74` solves to the correct optimum `10482.7952` (HiGHS agrees), and the
+  MIPs return honest `TIME_LIMIT` incumbents.
+
+### Fix: B&B best-bound / gap reporting
+
+`compute_best_bound()` only considered *solved* unbranched frontier nodes. At a
+time-limited exit the frontier is mostly unsolved children (`lower_bound = -inf`),
+so the bound fell back to the incumbent and the CLI reported `Gap: 0.000000` on
+clearly suboptimal incumbents. Both the serial and parallel solvers now let an
+unsolved frontier node inherit the bound of its nearest solved ancestor (branching
+only tightens the region), so the reported gap is valid. `mas74` now reports a
+~26% gap instead of 0%.
+
+### Benchmark data shipped
+
+- `benchmarks/mittelmann/{agg,fit2p}.mps` + HiGHS-verified full-precision
+  `reference.csv` (agg `-35991767.2865765`; fit2p `68464.29329383216`).
+- `benchmarks/miplib/` (10 instances) and `benchmarks/qplib/` reference CSVs.
+- `benchmarks/{netlib,miplib,qplib,mittelmann}/CMakeLists.txt` expose opt-in
+  `bench_<suite>` custom targets (not part of the fast `ctest` gate). Runner
+  compares objectives at 1e-6 relative tolerance.
+
+### Honest baselines (Release, Windows 11)
+
+| Suite | Result | Notes |
+|---|---|---|
+| netlib (21) | 16/21 | unchanged: 25fv47, bandm, dfl001 TIME/ITER_LIMIT; shell (rel 1.3e-6) and tuff (rel 6.8e-6) just outside 1e-6 |
+| mittelmann (2) | 1/2 | agg PASS (0.05 s); fit2p TIME_LIMIT (>10k vars, AUTO→IPM) |
+| miplib (10) | 1/10 | flugpl PASS. **No false INFEASIBLE**: mas74/mas76 now TIME_LIMIT with valid incumbents; enlight8/glass4 no incumbent in 30 s |
+| qplib | not run | nonconvex MIQP set; use bounded per-instance limits |
+
 ## Known Issues / Failures
 
 1. **dfl001** does not converge with the built-in engines within reasonable memory/time: the

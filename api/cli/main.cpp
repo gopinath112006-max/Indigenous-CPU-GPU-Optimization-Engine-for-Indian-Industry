@@ -136,7 +136,8 @@ void write_solution_file(const std::string& path, const Problem& problem, const 
 
 nlohmann::json solve_report_json(const Problem& problem, const Solution& solution,
                                  double wall_ms,
-                                 const validation::VerificationResult& verification) {
+                                 const validation::VerificationResult& verification,
+                                 const SolverOptions& options) {
     nlohmann::json j;
     j["problem_name"] = problem.name;
     j["solver_version"] = "0.1.0";
@@ -154,6 +155,20 @@ nlohmann::json solve_report_json(const Problem& problem, const Solution& solutio
     j["bb_nodes"] = solution.bb_nodes;
     j["solve_time_ms"] = solution.solve_time_ms;
     j["wall_time_ms"] = wall_ms;
+    j["backend_used"] = solution.backend_used;
+    j["solver_options"] = {
+        {"use_gpu", options.use_gpu},
+        {"compute_target", static_cast<int>(options.compute_target)},
+        {"presolve", static_cast<int>(options.presolve)},
+        {"scaling", static_cast<int>(options.scaling)},
+        {"threads", options.thread_count},
+        {"time_limit_seconds", options.time_limit_seconds},
+        {"mip_gap_tolerance", options.mip_gap_tolerance},
+        {"node_limit", options.node_limit},
+        {"solution_limit", options.solution_limit},
+        {"heuristic_rins", options.heuristic_rins},
+        {"heuristic_feasibility_pump", options.heuristic_feasibility_pump}
+    };
     j["verification"] = {
         {"feasible", verification.feasible},
         {"optimal", verification.optimal},
@@ -200,6 +215,35 @@ int cmd_solve(int argc, char** argv) {
             std::string val = argv[++i];
             if (val == "off") options.use_gpu = false;
             else if (val == "on") options.use_gpu = true;
+        } else if (arg == "--compute-target" && i + 1 < argc) {
+            std::string val = argv[++i];
+            if (val == "cpu") options.compute_target = ComputeTarget::CPU_ONLY;
+            else if (val == "auto") options.compute_target = ComputeTarget::CPU_GPU_AUTO;
+            else if (val == "force") options.compute_target = ComputeTarget::CPU_GPU_FORCE;
+        } else if (arg == "--presolve" && i + 1 < argc) {
+            std::string val = argv[++i];
+            if (val == "off") options.presolve = PresolveLevel::OFF;
+            else if (val == "conservative") options.presolve = PresolveLevel::CONSERVATIVE;
+            else if (val == "aggressive") options.presolve = PresolveLevel::AGGRESSIVE;
+        } else if (arg == "--scaling" && i + 1 < argc) {
+            std::string val = argv[++i];
+            if (val == "none") options.scaling = ScalingMethod::NONE;
+            else if (val == "geometric") options.scaling = ScalingMethod::GEOMETRIC;
+            else if (val == "curtis-reid") options.scaling = ScalingMethod::CURTIS_REID;
+        } else if (arg == "--rins") {
+            options.heuristic_rins = true;
+        } else if (arg == "--feasibility-pump") {
+            options.heuristic_feasibility_pump = true;
+        } else if (arg == "--rins-freq" && i + 1 < argc) {
+            options.rins_frequency = std::stoi(argv[++i]);
+        } else if (arg == "--primal-tol" && i + 1 < argc) {
+            options.tolerances.feasibility_tol(std::stod(argv[++i]));
+        } else if (arg == "--dual-tol" && i + 1 < argc) {
+            options.tolerances.optimality_tol(std::stod(argv[++i]));
+        } else if (arg == "--node-limit" && i + 1 < argc) {
+            options.node_limit = std::stoull(argv[++i]);
+        } else if (arg == "--solution-limit" && i + 1 < argc) {
+            options.solution_limit = std::stoull(argv[++i]);
         } else if (arg == "--engine" && i + 1 < argc) {
             std::string val = argv[++i];
             if (val == "simplex") options.engine = EngineType::PRIMAL_SIMPLEX;
@@ -293,7 +337,7 @@ int cmd_solve(int argc, char** argv) {
             std::cout << "Solution written to " << out_file << "\n";
         }
         if (!report_file.empty()) {
-            auto report = solve_report_json(problem, solution, elapsed, verification);
+            auto report = solve_report_json(problem, solution, elapsed, verification, options);
             std::ofstream ros(report_file);
             if (!ros.is_open()) {
                 std::cerr << "Warning: cannot open report file: " << report_file << "\n";

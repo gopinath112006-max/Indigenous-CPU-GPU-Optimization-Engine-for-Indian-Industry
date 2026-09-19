@@ -59,6 +59,17 @@ private:
     void add_constraint(int idx);
     void remove_constraint(int idx);
     void solve_kkt_system(const model::Problem& problem);
+
+    // Cycling / rank-deficient recovery helpers.
+    double compute_objective(const model::Problem& problem, const std::vector<double>& x) const;
+    void compute_gradient(const model::Problem& problem, const std::vector<double>& x,
+                          std::vector<double>& grad) const;
+    double max_constraint_violation(const model::Problem& problem, const std::vector<double>& x) const;
+    bool project_to_feasible(const model::Problem& problem, std::vector<double>& x) const;
+    void rebuild_active_set(const model::Problem& problem);
+    void recompute_multipliers(const model::Problem& problem);
+    // Returns true when a feasible, objective-improving point was recovered.
+    bool projected_gradient_recovery(const model::Problem& problem);
 };
 
 } // namespace hypernova::qp

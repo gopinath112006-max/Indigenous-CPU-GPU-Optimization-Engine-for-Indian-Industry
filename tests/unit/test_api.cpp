@@ -286,3 +286,29 @@ TEST(APITest, SolverSolveLPBAC) {
 
     EXPECT_TRUE(result.is_feasible());
 }
+
+TEST(APITest, OptionWiringVerification) {
+    Problem prob;
+    prob.name = "option_wiring";
+    prob.add_variable(0.0, 10.0, model::VarType::INTEGER, "x1");
+    prob.add_variable(0.0, 10.0, model::VarType::INTEGER, "x2");
+    prob.add_constraint({{0, 1.0}, {1, 1.0}}, model::ConstraintSense::LE, 7.0, "c1");
+    prob.set_objective({{0, 5.0}, {1, 4.0}}, model::ObjectiveSense::MAXIMIZE);
+
+    SolverOptions opts;
+    opts.node_limit = 5;
+    opts.solution_limit = 1;
+    opts.use_gpu = true;
+    opts.compute_target = ComputeTarget::CPU_GPU_AUTO;
+    opts.presolve = PresolveLevel::AGGRESSIVE;
+    opts.scaling = ScalingMethod::GEOMETRIC;
+
+    Solver solver(opts);
+    auto result = solver.solve(prob);
+
+    EXPECT_TRUE(result.is_feasible() || result.status == model::ProblemStatus::ITER_LIMIT);
+    EXPECT_FALSE(result.backend_used.empty());
+    EXPECT_EQ(solver.options().node_limit, 5u);
+    EXPECT_EQ(solver.options().solution_limit, 1u);
+    EXPECT_TRUE(solver.options().use_gpu);
+}

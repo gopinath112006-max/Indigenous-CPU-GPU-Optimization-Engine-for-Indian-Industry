@@ -15,6 +15,9 @@ target_link_libraries(hypernova_model PUBLIC
     hypernova_numerical
     Threads::Threads
 )
+target_link_libraries(hypernova_model PRIVATE
+    nlohmann_json::nlohmann_json
+)
 
 install(TARGETS hypernova_model
     LIBRARY DESTINATION lib

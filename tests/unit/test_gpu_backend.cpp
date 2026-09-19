@@ -312,3 +312,90 @@ TEST_F(CudaBackendTest, CostModelDispatchesToGPUOnLargeProblem) {
     expect_close(C, C_ref, 1e-9);
     auto_backend->finalize();
 }
+
+#include <hypernova/api.hpp>
+
+TEST(SolverGpuIntegrationTest, EndToEndSolveAutoMode) {
+    hypernova::Problem problem;
+    auto x0 = problem.add_variable(0.0, 10.0, hypernova::model::VarType::CONTINUOUS, "x0");
+    auto x1 = problem.add_variable(0.0, 10.0, hypernova::model::VarType::CONTINUOUS, "x1");
+    problem.add_constraint({{x0, 1.0}, {x1, 1.0}}, hypernova::model::ConstraintSense::LE, 15.0, "c0");
+    problem.set_objective({{x0, 2.0}, {x1, 3.0}}, hypernova::model::ObjectiveSense::MAXIMIZE);
+
+    hypernova::SolverOptions options;
+    options.compute_target = hypernova::ComputeTarget::CPU_GPU_AUTO;
+    options.use_gpu = true;
+
+    hypernova::Solver solver(options);
+    hypernova::Solution sol = solver.solve(problem);
+
+    EXPECT_TRUE(sol.is_optimal());
+    EXPECT_NEAR(sol.objective_value, 40.0, 1e-6);
+    EXPECT_FALSE(sol.backend_used.empty());
+}
+
+TEST(SolverGpuIntegrationTest, EndToEndSolveForcedMode) {
+    hypernova::Problem problem;
+    auto x0 = problem.add_variable(0.0, 10.0, hypernova::model::VarType::CONTINUOUS, "x0");
+    auto x1 = problem.add_variable(0.0, 10.0, hypernova::model::VarType::CONTINUOUS, "x1");
+    problem.add_constraint({{x0, 1.0}, {x1, 2.0}}, hypernova::model::ConstraintSense::LE, 12.0, "c0");
+    problem.set_objective({{x0, 3.0}, {x1, 4.0}}, hypernova::model::ObjectiveSense::MAXIMIZE);
+
+    hypernova::SolverOptions options;
+    options.compute_target = hypernova::ComputeTarget::CPU_GPU_FORCE;
+    options.use_gpu = true;
+
+    hypernova::Solver solver(options);
+    hypernova::Solution sol = solver.solve(problem);
+
+    EXPECT_TRUE(sol.is_optimal());
+    EXPECT_NEAR(sol.objective_value, 34.0, 1e-6);
+    EXPECT_NE(sol.backend_used.find("cuda"), std::string::npos);
+}
+
+TEST(SolverGpuIntegrationTest, CpuGpuNumericalParity) {
+    hypernova::Problem problem;
+    auto x0 = problem.add_variable(0.0, 50.0, hypernova::model::VarType::CONTINUOUS, "x0");
+    auto x1 = problem.add_variable(0.0, 50.0, hypernova::model::VarType::CONTINUOUS, "x1");
+    auto x2 = problem.add_variable(0.0, 50.0, hypernova::model::VarType::CONTINUOUS, "x2");
+    problem.add_constraint({{x0, 2.0}, {x1, 1.0}, {x2, 1.0}}, hypernova::model::ConstraintSense::LE, 80.0, "c0");
+    problem.add_constraint({{x0, 1.0}, {x1, 2.0}, {x2, 1.0}}, hypernova::model::ConstraintSense::LE, 90.0, "c1");
+    problem.set_objective({{x0, 5.0}, {x1, 4.0}, {x2, 3.0}}, hypernova::model::ObjectiveSense::MAXIMIZE);
+
+    hypernova::SolverOptions cpu_opts;
+    cpu_opts.compute_target = hypernova::ComputeTarget::CPU_ONLY;
+    cpu_opts.use_gpu = false;
+
+    hypernova::Solver cpu_solver(cpu_opts);
+    hypernova::Solution cpu_sol = cpu_solver.solve(problem);
+
+    hypernova::SolverOptions gpu_opts;
+    gpu_opts.compute_target = hypernova::ComputeTarget::CPU_GPU_FORCE;
+    gpu_opts.use_gpu = true;
+
+    hypernova::Solver gpu_solver(gpu_opts);
+    hypernova::Solution gpu_sol = gpu_solver.solve(problem);
+
+    EXPECT_EQ(cpu_sol.status, gpu_sol.status);
+    EXPECT_NEAR(cpu_sol.objective_value, gpu_sol.objective_value, 1e-6);
+    ASSERT_EQ(cpu_sol.primal.size(), gpu_sol.primal.size());
+    for (std::size_t i = 0; i < cpu_sol.primal.size(); ++i) {
+        EXPECT_NEAR(cpu_sol.primal[i], gpu_sol.primal[i], 1e-5);
+    }
+}
+
+TEST(SolverGpuIntegrationTest, FallbackWhenGpuDisabled) {
+    hypernova::Problem problem;
+    auto x0 = problem.add_variable(0.0, 1.0, hypernova::model::VarType::CONTINUOUS, "x0");
+    problem.set_objective({{x0, 10.0}}, hypernova::model::ObjectiveSense::MAXIMIZE);
+
+    hypernova::SolverOptions options;
+    options.use_gpu = false;
+    options.compute_target = hypernova::ComputeTarget::CPU_ONLY;
+
+    hypernova::Solver solver(options);
+    hypernova::Solution sol = solver.solve(problem);
+
+    EXPECT_TRUE(sol.is_optimal());
+    EXPECT_EQ(sol.backend_used, "cpu (GPU disabled)");
+}

@@ -57,9 +57,22 @@ BnBNode* BestEstimateSelector::select_node(std::vector<BnBNode*>& candidates) {
 
 void BestEstimateSelector::add_node(BnBNode* node) {
     if (!node->pruned) {
-        Compare cmp(incumbent_);
         queue_.push(node);
     }
+}
+
+void BestEstimateSelector::set_incumbent(double incumbent) {
+    if (incumbent == incumbent_) return;
+    incumbent_ = incumbent;
+    // Rebuild queue with new comparator
+    std::vector<BnBNode*> nodes;
+    while (!queue_.empty()) {
+        nodes.push_back(queue_.top());
+        queue_.pop();
+    }
+    Compare cmp(incumbent_);
+    queue_ = decltype(queue_)(cmp);
+    for (auto* n : nodes) queue_.push(n);
 }
 
 HybridSelector::HybridSelector(int dive_depth)
@@ -91,6 +104,7 @@ BnBNode* HybridSelector::select_node(std::vector<BnBNode*>& candidates) {
     candidates.clear();
 
     while (true) {
+        if (empty()) return nullptr;
         switch (current_phase_) {
             case Phase::DIVE:
                 if (!dive_stack_.empty() && dive_count_ < dive_depth_) {
@@ -146,7 +160,22 @@ void HybridSelector::add_node(BnBNode* node) {
 }
 
 void HybridSelector::set_incumbent(double incumbent) {
+    if (incumbent == incumbent_) return;
     incumbent_ = incumbent;
+    // Rebuild the best_estimate_queue_ since the comparator depends on incumbent_
+    std::vector<BnBNode*> nodes;
+    while (!best_estimate_queue_.empty()) {
+        nodes.push_back(best_estimate_queue_.top());
+        best_estimate_queue_.pop();
+    }
+    // best_estimate_queue_ already captures `this`, so we just re-instantiate it
+    best_estimate_queue_ = decltype(best_estimate_queue_)(
+        [this](BnBNode* a, BnBNode* b) {
+            double est_a = a->lower_bound + (incumbent_ - a->lower_bound) * 0.5;
+            double est_b = b->lower_bound + (incumbent_ - b->lower_bound) * 0.5;
+            return est_a > est_b;
+        });
+    for (auto* n : nodes) best_estimate_queue_.push(n);
 }
 
 bool HybridSelector::empty() const {

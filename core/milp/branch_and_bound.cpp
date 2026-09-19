@@ -67,9 +67,9 @@ BranchAndBoundResult BranchAndBoundSolver::solve_serial(const model::Problem& pr
         if (options_.interrupt_callback && options_.interrupt_callback())
             had_interrupt = true;
 
-        // Queue: the proper NodeSelector classes handle strategy-specific
         // ordering. HYBRID cycles through DIVE -> BEST_FIRST -> BEST_ESTIMATE.
         auto node_selector = create_selector(options_.branching.node_strategy);
+        node_selector->set_incumbent(best_objective_);
 
         for (std::size_t i = 0; i < nodes_.size(); ++i) {
             if (!nodes_[i].pruned) {
@@ -106,7 +106,11 @@ BranchAndBoundResult BranchAndBoundSolver::solve_serial(const model::Problem& pr
                 continue;
             }
 
+            double old_best = best_objective_;
             process_node(node, problem);
+            if (best_objective_ < old_best) {
+                node_selector->set_incumbent(best_objective_);
+            }
             ++nodes_explored_;
 
             if (std::getenv("HYPERNOVA_BB_DBG")) {

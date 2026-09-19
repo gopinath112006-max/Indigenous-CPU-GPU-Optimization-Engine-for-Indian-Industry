@@ -9,6 +9,8 @@
 #include <memory>
 #include <functional>
 
+namespace hypernova::execution { class IComputeBackend; }
+
 namespace hypernova::lp {
 
 struct InteriorPointOptions {
@@ -21,6 +23,7 @@ struct InteriorPointOptions {
     bool crossover = true;
     int crossover_max_iter = 100;
     std::function<bool()> interrupt_callback;
+    std::shared_ptr<execution::IComputeBackend> compute_backend = nullptr;
 };
 
 struct InteriorPointResult {

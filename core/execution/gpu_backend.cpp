@@ -232,6 +232,10 @@ public:
         return 0;
     }
 
+    bool was_gpu_kernel_executed() const override { return kernel_executions_ > 0; }
+    std::size_t gpu_kernel_executions() const override { return kernel_executions_; }
+    void reset_execution_stats() override { kernel_executions_ = 0; }
+
     // Measured numbers (nanosecond-accurate wall timing on this device) that
     // the cost model consumes via GPUCostModel::set_device_params.
     double measured_spmv_gbps() const { return measured_spmv_gbps_; }
@@ -404,6 +408,9 @@ private:
             ok = DriverApi::copy_d2h(y.data(), d_y, m.nrows * sizeof(double));
             if (!ok) fail("D2H copy of spmv result");
         }
+        if (ok) {
+            ++kernel_executions_;
+        }
         DriverApi::free(d_x);
         DriverApi::free(d_y);
         return ok;
@@ -444,6 +451,9 @@ private:
             C.resize(m.nrows * ncb);
             ok = DriverApi::copy_d2h(C.data(), d_c, c_bytes);
             if (!ok) fail("D2H copy of spmm result");
+        }
+        if (ok) {
+            ++kernel_executions_;
         }
         DriverApi::free(d_b);
         DriverApi::free(d_c);
@@ -575,6 +585,7 @@ private:
     double measured_d2h_gbps_ = 0.0;  // raw pageable D2H measurement
     double calibrated_h2d_gbps_ = 0.0; // bounded H2D estimate for the model
 
+    std::size_t kernel_executions_ = 0;
     std::string last_error_;
     mutable std::mutex mutex_;
 };
@@ -585,7 +596,22 @@ private:
 
 class AutoBackend : public IComputeBackend {
 public:
+    explicit AutoBackend(bool force_gpu = false) : force_gpu_(force_gpu) {}
+
     ComputeBackendType type() const override { return ComputeBackendType::AUTO; }
+
+    void set_force_gpu(bool force) { force_gpu_ = force; }
+    bool is_force_gpu() const { return force_gpu_; }
+
+    bool was_gpu_kernel_executed() const override {
+        return cuda_ && cuda_->was_gpu_kernel_executed();
+    }
+    std::size_t gpu_kernel_executions() const override {
+        return cuda_ ? cuda_->gpu_kernel_executions() : 0;
+    }
+    void reset_execution_stats() override {
+        if (cuda_) cuda_->reset_execution_stats();
+    }
 
     std::string name() const override {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -630,7 +656,7 @@ public:
               std::vector<double>& y) override {
         const std::size_t nrows = row_ptr.size() >= 1 ? row_ptr.size() - 1 : 0;
         const auto decision = GPUCostModel::decide(values, col_indices, row_ptr, nrows,
-                                                   /*ncols=*/0, /*batch_size=*/1);
+                                                   /*ncols=*/0, /*batch_size=*/1, force_gpu_);
         if (decision.backend == ComputeBackendType::CUDA && cuda_ &&
             cuda_->is_available()) {
             try {
@@ -651,7 +677,7 @@ public:
               std::size_t ncols_B) override {
         const std::size_t nrows = row_ptr.size() >= 1 ? row_ptr.size() - 1 : 0;
         const auto decision = GPUCostModel::decide(values, col_indices, row_ptr, nrows,
-                                                   /*ncols=*/ncols_B, /*batch_size=*/ncols_B);
+                                                   /*ncols=*/ncols_B, /*batch_size=*/ncols_B, force_gpu_);
         if (decision.backend == ComputeBackendType::CUDA && cuda_ &&
             cuda_->is_available()) {
             try {
@@ -673,6 +699,7 @@ public:
     }
 
 private:
+    bool force_gpu_ = false;
     std::unique_ptr<CPUBackend> cpu_;
     std::unique_ptr<CudaDriverBackend> cuda_;
     std::string name_ = "Auto(CPU)";
@@ -760,7 +787,8 @@ GPUCostModel::Decision GPUCostModel::decide(const std::vector<double>& values,
                                             const std::vector<std::size_t>& row_ptr,
                                             std::size_t nrows,
                                             std::size_t ncols,
-                                            int batch_size) {
+                                            int batch_size,
+                                            bool force_gpu) {
     (void)ncols;
     Decision decision;
     const double nnz = static_cast<double>(values.size());
@@ -774,7 +802,7 @@ GPUCostModel::Decision GPUCostModel::decide(const std::vector<double>& values,
         std::lock_guard<std::mutex> lock(model_mutex());
         return model_params().device_spmv_gbps;
     }();
-    if (dev_rate <= 0.0) {
+    if (dev_rate <= 0.0 && !force_gpu) {
         decision.reason = "no calibrated GPU device; CPU dispatch";
         decision.estimated_cpu_time_ms =
             estimate_cpu_spmv(values, col_indices, row_ptr, nrows) * batch_size;
@@ -799,13 +827,14 @@ GPUCostModel::Decision GPUCostModel::decide(const std::vector<double>& values,
                                      decision.estimated_gpu_time_ms
                                : 0.0;
 
-    if (big_enough && speedup >= 1.5) {
+    if (force_gpu || (big_enough && speedup >= 1.5)) {
         decision.backend = ComputeBackendType::CUDA;
-        decision.reason = "GPU estimated ~" + std::to_string(speedup).substr(0, 4) +
-                          "x faster (nnz=" +
-                          std::to_string(static_cast<long long>(nnz)) +
-                          ", matrix resident, batch=" +
-                          std::to_string(batch_size) + ")";
+        decision.reason = force_gpu ? "GPU execution forced by options"
+                                    : ("GPU estimated ~" + std::to_string(speedup).substr(0, 4) +
+                                       "x faster (nnz=" +
+                                       std::to_string(static_cast<long long>(nnz)) +
+                                       ", matrix resident, batch=" +
+                                       std::to_string(batch_size) + ")");
     } else if (!big_enough) {
         decision.reason = "problem too small to amortize GPU launch/transfer overhead";
     } else {
@@ -843,20 +872,27 @@ bool cuda_backend_usable() {
 
 std::unique_ptr<IComputeBackend> ComputeBackendFactory::create_backend(ComputeBackendType type) {
     switch (type) {
-        case ComputeBackendType::AUTO:
-            return std::make_unique<AutoBackend>();
-        case ComputeBackendType::CUDA:
+        case ComputeBackendType::AUTO: {
+            auto b = std::make_unique<AutoBackend>(/*force_gpu=*/false);
+            b->initialize();
+            return b;
+        }
+        case ComputeBackendType::CUDA: {
             if (cuda_backend_usable()) {
                 auto backend = std::make_unique<CudaDriverBackend>();
                 backend->initialize();
                 if (backend->is_available()) return backend;
             }
             return std::make_unique<CPUBackend>();
+        }
         case ComputeBackendType::CPU:
         case ComputeBackendType::HIP:
         case ComputeBackendType::SYCL:
-        default:
-            return std::make_unique<CPUBackend>();
+        default: {
+            auto b = std::make_unique<CPUBackend>();
+            b->initialize();
+            return b;
+        }
     }
 }
 

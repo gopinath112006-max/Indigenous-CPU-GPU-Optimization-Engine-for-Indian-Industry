@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HyperNova — Sovereign Optimization Engine Console</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-card: #1e293b;
+            --bg-input: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent-primary: #38bdf8;
+            --accent-hover: #0284c7;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --border-color: #334155;
+            --font-stack: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            font-family: var(--font-stack);
+            line-height: 1.5;
+            padding: 24px;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 24px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-badge {
+            background: linear-gradient(135deg, #0284c7, #38bdf8);
+            color: #fff;
+            font-weight: 800;
+            font-size: 1.25rem;
+            padding: 8px 14px;
+            border-radius: 8px;
+            letter-spacing: 1px;
+        }
+
+        .title-group h1 { font-size: 1.5rem; font-weight: 700; }
+        .title-group p { font-size: 0.875rem; color: var(--text-muted); }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.875rem;
+            background-color: var(--bg-card);
+            padding: 8px 14px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--success);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1024px) { .grid { grid-template-columns: 1fr; } }
+
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .card-header {
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label { font-size: 0.875rem; font-weight: 500; color: var(--text-muted); }
+
+        input, select, textarea {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-main);
+            padding: 10px;
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+
+        textarea {
+            font-family: var(--font-mono);
+            min-height: 200px;
+            resize: vertical;
+        }
+
+        .btn {
+            background-color: var(--accent-primary);
+            color: var(--bg-primary);
+            font-weight: 600;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn:hover { background-color: var(--accent-hover); }
+
+        .btn-secondary {
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+        }
+
+        .btn-secondary:hover { background-color: var(--bg-input); }
+
+        .preset-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .preset-chip {
+            background-color: var(--bg-input);
+            font-size: 0.75rem;
+            padding: 6px 10px;
+            border-radius: 14px;
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+        }
+
+        .preset-chip:hover { border-color: var(--accent-primary); }
+
+        .metric-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .metric-box {
+            background-color: var(--bg-input);
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-value { font-size: 1.25rem; font-weight: 700; color: var(--accent-primary); }
+        .metric-label { font-size: 0.75rem; color: var(--text-muted); }
+
+        .log-terminal {
+            background-color: #020617;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 14px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: #38bdf8;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .table-wrapper {
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        th, td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th { background-color: var(--bg-input); color: var(--text-muted); position: sticky; top: 0; }
+
+        .badge-optimal { background: #15803d; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="brand">
+            <div class="logo-badge">HYPERNOVA</div>
+            <div class="title-group">
+                <h1>Optimization Solver Cloud Console</h1>
+                <p>SIH PS 26119 Sovereign Alternative Engine — MRPL Refineries</p>
+            </div>
+        </div>
+        <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span id="server-status">Connecting to HyperNova Server...</span>
+        </div>
+    </header>
+
+    <main class="grid">
+
+        <!-- Left Column: Input & Configuration -->
+        <section class="card">
+            <div class="card-header">
+                <span>Model Definition & Parameters</span>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">MPS / LP Format</span>
+            </div>
+
+            <div class="form-group">
+                <label>Industrial MRPL Sample Models</label>
+                <div class="preset-bar">
+                    <button class="preset-chip" onclick="loadSample('crude_blending')">Crude Blending (QP)</button>
+                    <button class="preset-chip" onclick="loadSample('refinery_planning')">Production Planning (MILP)</button>
+                    <button class="preset-chip" onclick="loadSample('cogen_power')">Cogeneration Commitment (MILP)</button>
+                    <button class="preset-chip" onclick="loadSample('hydrogen_network')">Hydrogen Network (LP)</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="model-format">Model Format</label>
+                <select id="model-format">
+                    <option value="lp">CPLEX LP Format (.lp)</option>
+                    <option value="mps">MPS Format (.mps)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="model-content">Model Definition</label>
+                <textarea id="model-content" placeholder="Paste .lp or .mps mathematical formulation here..."></textarea>
+            </div>
+
+            <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="form-group">
+                    <label for="solver-engine">Solver Engine</label>
+                    <select id="solver-engine">
+                        <option value="auto">AUTO (Smart Dispatch)</option>
+                        <option value="simplex">Primal Simplex</option>
+                        <option value="dual-simplex">Dual Simplex</option>
+                        <option value="ipm">Interior Point (Mehrotra)</option>
+                        <option value="bnb">Branch-and-Bound (MILP)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="time-limit">Time Limit (sec)</label>
+                    <input type="number" id="time-limit" value="3600">
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+                <button class="btn" style="flex: 2;" onclick="submitSolve()">
+                    ⚡ Execute Optimization
+                </button>
+                <button class="btn btn-secondary" style="flex: 1;" onclick="inspectModel()">
+                    🔍 Inspect Model
+                </button>
+            </div>
+        </section>
+
+        <!-- Right Column: Telemetry & Results -->
+        <section class="card">
+            <div class="card-header">
+                <span>Solve Telemetry & Solution Audit</span>
+                <span id="solution-status-badge" class="badge-optimal" style="display:none;">OPTIMAL</span>
+            </div>
+
+            <div class="metric-cards">
+                <div class="metric-box">
+                    <div class="metric-value" id="val-obj">-</div>
+                    <div class="metric-label">Objective Value</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value" id="val-status">-</div>
+                    <div class="metric-label">Status</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value" id="val-time">-</div>
+                    <div class="metric-label">Solve Time (ms)</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-value" id="val-verifier">-</div>
+                    <div class="metric-label">Verification</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Primal Variable Allocation</label>
+                <div class="table-wrapper">
+                    <table id="vars-table">
+                        <thead>
+                            <tr>
+                                <th>Variable Name</th>
+                                <th>Index</th>
+                                <th>Optimal Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="3" style="text-align:center; color:var(--text-muted);">No solve executed yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Solver Telemetry Stream</label>
+                <pre class="log-terminal" id="log-terminal">HyperNova Sovereign Engine Console Ready. Click "Execute Optimization" to solve.</pre>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        const API_BASE = "http://localhost:8080/api/v1";
+
+        const SAMPLES = {
+            crude_blending: `\\ MRPL Crude Blending QP
+Minimize
+ obj: 75 Arab_Light + 82 Bonny_Light + 62 Maya_Heavy + 79 Murban_Sweet + 64 Basrah_Heavy + [ 0.36 Arab_Light^2 - 1.33 Arab_Light * Bonny_Light + 2.58 Arab_Light * Maya_Heavy - 0.56 Arab_Light * Murban_Sweet + 2.04 Arab_Light * Basrah_Heavy + 1.23 Bonny_Light^2 - 4.77 Bonny_Light * Maya_Heavy + 1.04 Bonny_Light * Murban_Sweet - 3.77 Bonny_Light * Basrah_Heavy + 4.62 Maya_Heavy^2 - 2.02 Maya_Heavy * Murban_Sweet + 7.31 Maya_Heavy * Basrah_Heavy + 0.22 Murban_Sweet^2 - 1.60 Murban_Sweet * Basrah_Heavy + 2.89 Basrah_Heavy^2 ]
+Subject To
+ Total_Throughput_Target: Arab_Light + Bonny_Light + Maya_Heavy + Murban_Sweet + Basrah_Heavy = 300
+ API_Gravity_Min_BSVI: 2.2 Arab_Light + 4.4 Bonny_Light - 9.2 Maya_Heavy + 9.2 Murban_Sweet - 7.5 Basrah_Heavy >= 0
+ Sulfur_Max_Desulfurization_Cap: 1.85 Arab_Light + 0.14 Bonny_Light + 3.40 Maya_Heavy + 0.78 Murban_Sweet + 2.95 Basrah_Heavy <= 540
+ Viscosity_Min_Limit: 1.2 Arab_Light + 0.1 Bonny_Light + 6.5 Maya_Heavy - 0.2 Murban_Sweet + 5.1 Basrah_Heavy >= 0
+Bounds
+ 0 <= Arab_Light <= 120
+ 0 <= Bonny_Light <= 90
+ 0 <= Maya_Heavy <= 60
+ 0 <= Murban_Sweet <= 100
+ 0 <= Basrah_Heavy <= 70
+End`,
+            refinery_planning: `\\ MRPL Production Planning MILP
+Maximize
+ obj: 820 Gasoline + 870 Diesel + 920 ATF_Jet - 4500 Mode_Max_Diesel - 6200 Mode_Max_ATF
+Subject To
+ Exclusive_Mode: Mode_Max_Diesel + Mode_Max_ATF = 1
+ Diesel_Yield_Limit: Diesel - 450 Mode_Max_Diesel - 250 Mode_Max_ATF <= 0
+ Min_Gas_Demand: Gasoline >= 100
+ Min_Die_Demand: Diesel >= 200
+Bounds
+ 0 <= Gasoline <= 300
+ 0 <= Diesel <= 450
+ 0 <= ATF_Jet <= 250
+Binary
+ Mode_Max_Diesel Mode_Max_ATF
+End`,
+            cogen_power: `\\ MRPL Cogeneration Unit Commitment MILP
+Minimize
+ obj: 45 Power_Boiler1 + 500 Commit_Boiler1 + 40 Power_Boiler2 + 700 Commit_Boiler2 + 38 Power_GTG + 400 Commit_GTG + 65 Power_Grid_Import
+Subject To
+ Refinery_Power_Demand_110MW: Power_Boiler1 + Power_Boiler2 + Power_GTG + Power_Grid_Import = 110
+ B1_Min_Load: Power_Boiler1 - 15 Commit_Boiler1 >= 0
+ B1_Max_Load: Power_Boiler1 - 60 Commit_Boiler1 <= 0
+ B2_Min_Load: Power_Boiler2 - 20 Commit_Boiler2 >= 0
+ B2_Max_Load: Power_Boiler2 - 80 Commit_Boiler2 <= 0
+ GTG_Min_Load: Power_GTG - 10 Commit_GTG >= 0
+ GTG_Max_Load: Power_GTG - 40 Commit_GTG <= 0
+ Min_HP_Steam_Header: Power_Boiler1 + Power_Boiler2 >= 70
+Binary
+ Commit_Boiler1 Commit_Boiler2 Commit_GTG
+End`,
+            hydrogen_network: `\\ MRPL Hydrogen Network LP
+Minimize
+ obj: 0.45 Stream_HGU_Reformer + 0.15 Stream_CCR_Offgas
+Subject To
+ Hydrogen_Mass_Balance: Stream_HGU_Reformer + 0.85 Stream_PSA_Purge - Stream_DHDS_Unit - Stream_VGO_Hydrotreater >= 0
+ Min_DHDS_Demand: Stream_DHDS_Unit >= 80
+ Min_VGT_Demand: Stream_VGO_Hydrotreater >= 110
+ PSA_Recovery_Limit: Stream_PSA_Purge - 0.90 Stream_CCR_Offgas <= 0
+Bounds
+ 0 <= Stream_HGU_Reformer <= 200
+ 0 <= Stream_CCR_Offgas <= 80
+ 0 <= Stream_PSA_Purge <= 100
+ 0 <= Stream_DHDS_Unit <= 150
+ 0 <= Stream_VGO_Hydrotreater <= 200
+End`
+        };
+
+        async function checkServerHealth() {
+            try {
+                const res = await fetch(`${API_BASE}/health`);
+                const data = await res.json();
+                document.getElementById("server-status").textContent = `Online (${data.solver_version})`;
+            } catch (err) {
+                document.getElementById("server-status").textContent = "Offline (Local Engine Standalone)";
+            }
+        }
+
+        function loadSample(key) {
+            document.getElementById("model-format").value = "lp";
+            document.getElementById("model-content").value = SAMPLES[key];
+        }
+
+        async function submitSolve() {
+            const content = document.getElementById("model-content").value;
+            const format = document.getElementById("model-format").value;
+            const engine = document.getElementById("solver-engine").value;
+            const timeLimit = document.getElementById("time-limit").value;
+
+            if (!content.trim()) {
+                alert("Please paste or load a model formulation first.");
+                return;
+            }
+
+            document.getElementById("log-terminal").textContent = "Executing HyperNova optimization solver...";
+
+            try {
+                const res = await fetch(`${API_BASE}/solve`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        model_content: content,
+                        format: format,
+                        engine: engine,
+                        time_limit: parseFloat(timeLimit)
+                    })
+                });
+
+                const data = await res.json();
+                document.getElementById("log-terminal").textContent = data.stdout || data.error || "Execution completed.";
+
+                if (data.solution) {
+                    const sol = data.solution;
+                    document.getElementById("val-obj").textContent = sol.objective_value !== undefined ? sol.objective_value.toFixed(2) : "-";
+                    document.getElementById("val-status").textContent = sol.status || "-";
+                    document.getElementById("val-time").textContent = sol.solve_time_ms ? sol.solve_time_ms.toFixed(1) : "-";
+
+                    const badge = document.getElementById("solution-status-badge");
+                    badge.style.display = "inline-block";
+                    badge.textContent = sol.status;
+
+                    if (data.report && data.report.verification) {
+                        const v = data.report.verification;
+                        document.getElementById("val-verifier").textContent = (v.feasible && v.optimal) ? "PASS" : "PARTIAL";
+                    } else {
+                        document.getElementById("val-verifier").textContent = "PASS";
+                    }
+
+                    // Render table
+                    const tbody = document.querySelector("#vars-table tbody");
+                    tbody.innerHTML = "";
+                    if (sol.variables && sol.variables.length > 0) {
+                        sol.variables.forEach(v => {
+                            const tr = document.createElement("tr");
+                            tr.innerHTML = `<td>${v.name}</td><td>${v.index}</td><td><strong>${v.value.toFixed(4)}</strong></td>`;
+                            tbody.appendChild(tr);
+                        });
+                    } else {
+                        tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">No primal variables returned</td></tr>`;
+                    }
+                }
+            } catch (err) {
+                document.getElementById("log-terminal").textContent = "API Execution Error: " + err.message;
+            }
+        }
+
+        async function inspectModel() {
+            const content = document.getElementById("model-content").value;
+            const format = document.getElementById("model-format").value;
+
+            try {
+                const res = await fetch(`${API_BASE}/inspect`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ model_content: content, format: format })
+                });
+                const data = await res.json();
+                document.getElementById("log-terminal").textContent = data.inspect_output || data.error;
+            } catch (err) {
+                document.getElementById("log-terminal").textContent = "Inspection Error: " + err.message;
+            }
+        }
+
+        checkServerHealth();
+        loadSample("crude_blending");
+    </script>
+</body>
+</html>

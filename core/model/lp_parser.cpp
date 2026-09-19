@@ -376,7 +376,8 @@ void LPParser::parse_sos(const std::string& line) {
 void LPParser::parse_quadratic(const std::string& line) {
     auto terms = parse_quadratic_expr(line);
     for (const auto& term : terms) {
-        builder_.add_quadratic_term(term.row, term.col, term.coeff);
+        double coeff = (term.row == term.col) ? 2.0 * term.coeff : term.coeff;
+        builder_.add_quadratic_term(term.row, term.col, coeff);
     }
 }
 
@@ -696,9 +697,16 @@ void write_lp(const Problem& problem, const std::string& filepath) {
 
     if (!problem.quadratic_terms.empty()) {
         file << "\nQuadratic\n";
+        // CPLEX LP convention: the coefficient written is the FULL x_i*x_j
+        // coefficient in the objective.  Internally QuadTerm stores a value q
+        // where the objective contribution is 0.5*q*x_i^2 for diagonal (i==j)
+        // and q*x_i*x_j for off-diagonal.  To match the file convention the
+        // diagonal coefficient must be halved before writing.
         for (const auto& term : problem.quadratic_terms) {
-            double coeff = (term.row == term.col) ? 0.5 * term.coeff : term.coeff;
-            file << " " << problem.variables[term.row].name << " * " << problem.variables[term.col].name << " " << coeff << "\n";
+            double c = (term.row == term.col) ? 0.5 * term.coeff : term.coeff;
+            file << " " << problem.variables[term.row].name
+                 << " * " << problem.variables[term.col].name
+                 << " " << c << "\n";
         }
     }
 

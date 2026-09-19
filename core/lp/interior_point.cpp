@@ -12,6 +12,7 @@
 #include <limits>
 #include <numeric>
 #include <unordered_map>
+#include "../execution/gpu_backend.hpp"
 
 namespace hypernova::lp {
 
@@ -477,7 +478,11 @@ InteriorPointResult InteriorPointSolver::solve(const model::Problem& problem) {
                 return std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now() - t_enter).count();
             };
-            matvec(f.M, x, tmp_m);
+            if (options_.compute_backend && f.M.nnz() > 0) {
+                options_.compute_backend->spmv(f.M.values(), f.M.col_indices(), f.M.row_ptr(), x, tmp_m);
+            } else {
+                matvec(f.M, x, tmp_m);
+            }
             for (std::size_t i = 0; i < f.m(); ++i) rp[i] = tmp_m[i] - f.rhs[i];
 
             tmp_n = matvec_t(f.M, lam);
@@ -548,9 +553,17 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
 
             for (std::size_t j = 0; j < f.n(); ++j) tmp_n[j] = D[j] * rd[j];
             std::vector<double> mdrd;
-            matvec(f.M, tmp_n, mdrd);
+            if (options_.compute_backend && f.M.nnz() > 0) {
+                options_.compute_backend->spmv(f.M.values(), f.M.col_indices(), f.M.row_ptr(), tmp_n, mdrd);
+            } else {
+                matvec(f.M, tmp_n, mdrd);
+            }
             std::vector<double> mx;
-            matvec(f.M, x, mx);
+            if (options_.compute_backend && f.M.nnz() > 0) {
+                options_.compute_backend->spmv(f.M.values(), f.M.col_indices(), f.M.row_ptr(), x, mx);
+            } else {
+                matvec(f.M, x, mx);
+            }
 
             for (std::size_t i = 0; i < f.m(); ++i) {
                 rhs_norm[i] = -rp[i] - mdrd[i] + mx[i];
@@ -603,10 +616,14 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
             std::vector<double> zinv_scaled(f.n());
             for (std::size_t j = 0; j < f.n(); ++j) {
                 zinv[j] = 1.0 / z[j];
-                zinv_scaled[j] = sigma * mu * zinv[j];
+                zinv_scaled[j] = (sigma * mu - dx[j] * dz[j]) * zinv[j];
             }
             std::vector<double> mz;
-            matvec(f.M, zinv_scaled, mz);
+            if (options_.compute_backend && f.M.nnz() > 0) {
+                options_.compute_backend->spmv(f.M.values(), f.M.col_indices(), f.M.row_ptr(), zinv_scaled, mz);
+            } else {
+                matvec(f.M, zinv_scaled, mz);
+            }
             for (std::size_t i = 0; i < f.m(); ++i) {
                 rhs_norm[i] = -rp[i] - mdrd[i] + mx[i] - mz[i];
             }
@@ -618,9 +635,9 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
 
             tmp_n = matvec_t(f.M, dlam);
             for (std::size_t j = 0; j < f.n(); ++j) {
-                dx[j] = D[j] * (tmp_n[j] + rd[j]) - x[j] + sigma * mu / z[j];
+                dx[j] = D[j] * (tmp_n[j] + rd[j]) - x[j] + zinv_scaled[j];
                 // Same algebraic identity as the affine step:
-                // dz[j] = (sigma*mu - x[j]*z[j] - z[j]*dx[j]) / x[j]
+                // dz[j] = (gamma - x[j]*z[j] - z[j]*dx[j]) / x[j]
                 //       = -(tmp_n[j] + rd[j])
                 dz[j] = -(tmp_n[j] + rd[j]);
             }
@@ -679,7 +696,11 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
         }
 
         if (!done && !interrupted) {
-            matvec(f.M, x, tmp_m);
+            if (options_.compute_backend && f.M.nnz() > 0) {
+                options_.compute_backend->spmv(f.M.values(), f.M.col_indices(), f.M.row_ptr(), x, tmp_m);
+            } else {
+                matvec(f.M, x, tmp_m);
+            }
             for (std::size_t i = 0; i < f.m(); ++i) rp[i] = tmp_m[i] - f.rhs[i];
             tmp_n = matvec_t(f.M, lam);
             for (std::size_t j = 0; j < f.n(); ++j) rd[j] = tmp_n[j] + z[j] - f.c[j];

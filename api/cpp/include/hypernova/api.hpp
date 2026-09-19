@@ -67,7 +67,7 @@ struct SolverOptions {
     NodeSelectionStrategy node_selection = NodeSelectionStrategy::HYBRID;
     BranchingStrategy branching = BranchingStrategy::RELIABILITY;
     PresolveLevel presolve = PresolveLevel::AGGRESSIVE;
-    ScalingMethod scaling = ScalingMethod::GEOMETRIC;
+    ScalingMethod scaling = ScalingMethod::NONE;
     ComputeTarget compute_target = ComputeTarget::CPU_GPU_AUTO;
     bool use_gpu = true;
     bool heuristic_feasibility_pump = false;
@@ -82,6 +82,9 @@ struct SolverOptions {
     lp::RatioTest simplex_ratio_test = lp::RatioTest::STANDARD;
     bool simplex_bland_rule = true;
     std::size_t simplex_steepest_edge_shortlist = 16;
+
+    std::size_t node_limit = 0;
+    std::size_t solution_limit = 0;
 
     SolverOptions() {
         tolerances = numerical::ToleranceConfig::industrial_defaults();
@@ -103,6 +106,7 @@ struct Solution {
     std::size_t ipm_iterations = 0;
     std::size_t bb_nodes = 0;
     double solve_time_ms = 0.0;
+    std::string backend_used = "cpu";
 
     bool is_optimal() const { return status == model::ProblemStatus::OPTIMAL; }
     bool is_feasible() const {

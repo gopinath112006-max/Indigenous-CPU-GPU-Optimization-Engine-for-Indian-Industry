@@ -61,7 +61,7 @@ public:
     ~SimplexSolver() = default;
 
     SimplexResult solve(const model::Problem& problem);
-    SimplexResult solve_with_basis(const model::Problem& problem, const std::vector<int>& var_status);
+    SimplexResult solve_with_basis(const model::Problem& problem, const std::vector<int>& var_status, const std::vector<int>& constraint_status = {});
 
     const SimplexOptions& options() const { return options_; }
     void set_options(const SimplexOptions& opts) { options_ = opts; }
@@ -70,7 +70,7 @@ private:
     numerical::ToleranceConfig tol_;
     SimplexOptions options_;
 
-    SimplexResult solve_impl(const model::Problem& problem, const std::vector<int>* warm_var_status);
+    SimplexResult solve_impl(const model::Problem& problem, const std::vector<int>* warm_var_status, const std::vector<int>* warm_con_status = nullptr);
 
     model::Problem eliminate_fixed_variables(const model::Problem& problem,
                                              std::vector<int>& var_map,
@@ -126,7 +126,7 @@ private:
     std::chrono::high_resolution_clock::time_point solve_start_time_;
 
     void initialize_basis(const model::Problem& problem);
-    void initialize_basis_with_warm_start(const model::Problem& problem, const std::vector<int>& var_status);
+    void initialize_basis_with_warm_start(const model::Problem& problem, const std::vector<int>& var_status, const std::vector<int>* con_status = nullptr);
     void compute_dual_solution();
     void compute_reduced_costs();
     int select_entering_variable();

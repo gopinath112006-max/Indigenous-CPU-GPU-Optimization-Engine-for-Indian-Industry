@@ -23,3 +23,11 @@ add_executable(test_edge_cases
 )
 target_link_libraries(test_edge_cases PRIVATE hypernova_core)
 setup_test_target(test_edge_cases)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_FOUND)
+    add_test(NAME test_python_api
+        COMMAND ${Python3_EXECUTABLE} -c "import sys; sys.path.append('${CMAKE_SOURCE_DIR}/python'); import hypernova; p = hypernova.Problem(); print('Python API OK')"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+endif()

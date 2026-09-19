@@ -12,6 +12,7 @@ public:
     virtual ~NodeSelector() = default;
     virtual BnBNode* select_node(std::vector<BnBNode*>& candidates) = 0;
     virtual void add_node(BnBNode* node) = 0;
+    virtual void set_incumbent(double /*incumbent*/) {}
     virtual bool empty() const = 0;
     virtual std::size_t size() const = 0;
 };
@@ -47,7 +48,7 @@ class BestEstimateSelector : public NodeSelector {
 public:
     BnBNode* select_node(std::vector<BnBNode*>& candidates) override;
     void add_node(BnBNode* node) override;
-    void set_incumbent(double incumbent) { incumbent_ = incumbent; }
+    void set_incumbent(double incumbent) override;
     bool empty() const override { return queue_.empty(); }
     std::size_t size() const override { return queue_.size(); }
 
@@ -71,7 +72,7 @@ public:
     HybridSelector(int dive_depth = 5);
     BnBNode* select_node(std::vector<BnBNode*>& candidates) override;
     void add_node(BnBNode* node) override;
-    void set_incumbent(double incumbent);
+    void set_incumbent(double incumbent) override;
     bool empty() const override;
     std::size_t size() const override;
 

@@ -38,16 +38,27 @@ VerificationResult SolutionVerifier::verify_detailed(
 
     auto dual_check = check_dual_feasibility(problem, solution);
     result.dual_infeasibility = dual_check.dual_infeasibility;
-    if (!dual_check.feasible) {
-        result.optimal = false;
-        if (result.feasible) result.message = "Dual infeasible: " + dual_check.message;
-    }
-
     auto comp_check = check_complementarity(problem, solution);
     result.complementarity = comp_check.complementarity;
-    if (!comp_check.feasible) {
-        result.optimal = false;
-        if (result.feasible) result.message = "Complementarity violation: " + comp_check.message;
+    if (problem.num_integer_vars() > 0) {
+        // A MIP solution carries LP-relaxation multipliers that are not a
+        // valid KKT dual certificate for the integer optimum (the branch tree
+        // provides the bound proof instead). Applying a continuous dual /
+        // complementarity test to such multipliers would spuriously flag valid
+        // integer solutions, so these checks are restricted to pure continuous
+        // problems (LP / QP).
+        if (std::getenv("HYPERNOVA_API_DBG")) {
+            std::cerr << "verify: MIP detected, dual/complementarity checks skipped\n";
+        }
+    } else {
+        if (!dual_check.feasible) {
+            result.optimal = false;
+            if (result.feasible) result.message = "Dual infeasible: " + dual_check.message;
+        }
+        if (!comp_check.feasible) {
+            result.optimal = false;
+            if (result.feasible) result.message = "Complementarity violation: " + comp_check.message;
+        }
     }
 
     auto int_check = check_integrality(problem, solution);
