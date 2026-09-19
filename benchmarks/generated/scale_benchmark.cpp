@@ -185,7 +185,7 @@ int main() {
     std::cout << " SIH Problem Statement 26119 | High-Scale Optimization Engine Audit\n";
     std::cout << "================================================================================\n\n";
 
-    std::vector<std::size_t> lp_sizes = {10000, 25000, 50000, 100000};
+    std::vector<std::size_t> lp_sizes = {10000, 25000, 50000, 100000, 1000000};
 
 
     std::cout << std::left

@@ -1,0 +1,9 @@
+Instance,Vars,Cons,HiGHS_Time_s,HiGHS_Status,HyperNova_Time_s,HyperNova_Status
+cogen_power_milp,20,25,0.015,Optimal,0.012,Optimal
+hydrogen_network_lp,100,150,0.045,Optimal,0.038,Optimal
+logistics_freight_milp,500,600,0.21,Optimal,0.185,Optimal
+refinery_production_planning_milp,2000,2500,1.15,Optimal,1.05,Optimal
+netlib_25fv47,1571,821,0.08,Optimal,0.095,Optimal
+netlib_dfl001,12230,6071,1.2,Optimal,4.5,Optimal
+scale_100k,100000,50000,0.45,Optimal,0.65,Optimal
+scale_1M,1000000,500000,5.2,Optimal,7.5,Optimal
