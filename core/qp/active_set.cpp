@@ -37,12 +37,25 @@ ActiveSetResult ActiveSetQPSolver::solve(const model::Problem& problem) {
         }
     }
 
-    if (options_.check_convexity && !check_convexity(minimized)) {
-        result.status = model::ProblemStatus::NUMERICAL_ERROR;
-        return result;
+    if (options_.check_convexity) {
+        last_convexity_ = classify_qp_convexity(minimized, tol_);
+        result.convexity = last_convexity_;
+        if (last_convexity_ == ConvexityClassification::NONCONVEX) {
+            result.status = model::ProblemStatus::NUMERICAL_ERROR;
+            return result;
+        }
+    }
+
+    for (const auto& var : minimized.variables) {
+        if (var.lower_bound > var.upper_bound + options_.feasibility_tol) {
+            result.status = model::ProblemStatus::INFEASIBLE;
+            return result;
+        }
     }
 
     try {
+        refinement_sweeps_ = 0;
+        kkt_regularization_ = options_.regularization;
         initialize(minimized);
 
         bool time_up = false;
@@ -79,15 +92,6 @@ ActiveSetResult ActiveSetQPSolver::solve(const model::Problem& problem) {
             if (is_kkt_optimal(minimized)) {
                 result.status = model::ProblemStatus::OPTIMAL;
                 break;
-            }
-            if (std::getenv("HYPERNOVA_DBG_QP")) {
-                std::cerr << "[QP] iter=" << iter << " stall=" << stall << " x=[";
-                for (double v : x_) std::cerr << " " << v;
-                std::cerr << " ] active_set=";
-                for (int a : active_set_) std::cerr << " " << a;
-                std::cerr << " lambda=[";
-                for (double l : lambda_) std::cerr << " " << l;
-                std::cerr << " ] f=" << compute_objective(minimized, x_) << "\n";
             }
 
             solve_kkt_system(minimized);
@@ -133,6 +137,8 @@ ActiveSetResult ActiveSetQPSolver::solve(const model::Problem& problem) {
         result.primal = x_;
         result.dual = lambda_;
         result.active_set = active_set_;
+        result.convexity = last_convexity_;
+        result.refinement_sweeps = refinement_sweeps_;
 
         result.objective_value = 0.0;
         for (std::size_t j = 0; j < nvars; ++j) {
@@ -210,28 +216,8 @@ void ActiveSetQPSolver::initialize(const model::Problem& problem) {
 }
 
 bool ActiveSetQPSolver::check_convexity(const model::Problem& problem) {
-    if (problem.quadratic_terms.empty()) return true;
-
-    std::size_t nvars = problem.variables.size();
-    std::vector<numerical::Triplet> triplets;
-    triplets.reserve(problem.quadratic_terms.size());
-    for (const auto& term : problem.quadratic_terms) {
-        if (term.row == term.col) {
-            triplets.emplace_back(term.row, term.col, term.coeff);
-        } else {
-            triplets.emplace_back(term.row, term.col, term.coeff);
-            triplets.emplace_back(term.col, term.row, term.coeff);
-        }
-    }
-
-    numerical::SparseMatrix q_mat = numerical::SparseMatrix::from_triplets(nvars, nvars, triplets);
-    auto ldlt = numerical::create_factorization(numerical::FactorizationType::LDLT, q_mat, tol_);
-    if (!ldlt) return false;
-
-    for (double d : ldlt->D_values()) {
-        if (d < -std::max(options_.feasibility_tol, tol_.singular_tol())) return false;
-    }
-    return true;
+    last_convexity_ = classify_qp_convexity(problem, tol_);
+    return last_convexity_ != ConvexityClassification::NONCONVEX;
 }
 
 bool ActiveSetQPSolver::is_kkt_optimal(const model::Problem& problem) {
@@ -291,18 +277,11 @@ bool ActiveSetQPSolver::is_kkt_optimal(const model::Problem& problem) {
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
         double val = x_[j];
-        bool debug = std::getenv("HYPERNOVA_DBG_QP") != nullptr;
-
-        if (debug) {
-            std::cerr << "[QP-KKT] j=" << j << " val=" << val << " lb=" << lb << " ub=" << ub
-                      << " grad=" << grad[j] << "\n";
-        }
 
         // Any value outside its bounds is infeasible and cannot be optimal,
         // regardless of gradient sign (e.g. a branching-fixed integer left at
         // its pin, or a clamped variable never driven back inside).
         if (val < lb - options_.feasibility_tol || val > ub + options_.feasibility_tol) {
-            if (debug) std::cerr << "[QP-KKT]   -> fail: out of bounds\n";
             return false;
         }
 
@@ -316,17 +295,14 @@ bool ActiveSetQPSolver::is_kkt_optimal(const model::Problem& problem) {
 
         if (val <= lb + options_.feasibility_tol) {
             if (grad[j] < -options_.optimality_tol) {
-                if (debug) std::cerr << "[QP-KKT]   -> fail at lb, grad<0\n";
                 return false;
             }
         } else if (val >= ub - options_.feasibility_tol) {
             if (grad[j] > options_.optimality_tol) {
-                if (debug) std::cerr << "[QP-KKT]   -> fail at ub, grad>0\n";
                 return false;
             }
         } else {
             if (std::abs(grad[j]) > options_.optimality_tol) {
-                if (debug) std::cerr << "[QP-KKT]   -> fail interior, |grad|>tol\n";
                 return false;
             }
         }
@@ -470,13 +446,17 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
                 double lb = problem.variables[j].lower_bound;
                 double ub = problem.variables[j].upper_bound;
                 if (ub - lb <= options_.feasibility_tol) continue;  // pinned
-                if (dx[j] < 0) {
+                if (dx[j] < -1e-12) {
                     if (lb > -std::numeric_limits<double>::infinity()) {
-                        max_step = std::min(max_step, (lb - x_[j]) / dx[j]);
+                        double step = (lb - x_[j]) / dx[j];
+                        if (step <= 0) max_step = 0.0;
+                        else max_step = std::min(max_step, step);
                     }
-                } else if (dx[j] > 0) {
+                } else if (dx[j] > 1e-12) {
                     if (ub < std::numeric_limits<double>::infinity()) {
-                        max_step = std::min(max_step, (ub - x_[j]) / dx[j]);
+                        double step = (ub - x_[j]) / dx[j];
+                        if (step <= 0) max_step = 0.0;
+                        else max_step = std::min(max_step, step);
                     }
                 }
             }
@@ -489,20 +469,6 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
         }
 
         std::vector<double> rhs(nvars, 0.0);
-        std::vector<numerical::Triplet> triplets;
-        triplets.reserve(nvars + 2 * problem.quadratic_terms.size());
-        std::vector<double> h_diag(nvars, 1e-10);
-        for (const auto& term : problem.quadratic_terms) {
-            if (term.row == term.col) {
-                h_diag[term.row] += term.coeff;
-            } else {
-                triplets.emplace_back(term.row, term.col, term.coeff);
-                triplets.emplace_back(term.col, term.row, term.coeff);
-            }
-        }
-        for (std::size_t j = 0; j < nvars; ++j) {
-            triplets.emplace_back(j, j, h_diag[j]);
-        }
 
         for (std::size_t j = 0; j < nvars; ++j) {
             double grad = problem.variables[j].objective_coeff;
@@ -513,12 +479,47 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
             rhs[j] = -grad;
         }
 
+        // Adaptive H + delta*I: on a singular factorization, raise delta (up to
+        // regularization_max) and re-factorize instead of giving up on the step.
         std::vector<double> sol(nvars, 0.0);
-        numerical::SparseMatrix kkt_mat = numerical::SparseMatrix::from_triplets(nvars, nvars, triplets);
-        auto fac = numerical::create_factorization(numerical::FactorizationType::LU, kkt_mat, tol_);
-        sol = rhs;
-        fac->solve(sol);
-        numerical::iterative_refinement(*fac, kkt_mat, sol, rhs);
+        std::unique_ptr<numerical::SparseFactorization> fac;
+        double reg = kkt_regularization_;
+        for (std::size_t k = 0; k < 8; ++k) {
+            std::vector<numerical::Triplet> triplets;
+            triplets.reserve(nvars + 2 * problem.quadratic_terms.size());
+            std::vector<double> h_diag(nvars, reg);
+            for (const auto& term : problem.quadratic_terms) {
+                if (term.row == term.col) {
+                    h_diag[term.row] += term.coeff;
+                } else {
+                    triplets.emplace_back(term.row, term.col, term.coeff);
+                    triplets.emplace_back(term.col, term.row, term.coeff);
+                }
+            }
+            for (std::size_t j = 0; j < nvars; ++j) {
+                triplets.emplace_back(j, j, h_diag[j]);
+            }
+            numerical::SparseMatrix kkt_mat = numerical::SparseMatrix::from_triplets(nvars, nvars, triplets);
+            fac = numerical::create_factorization(numerical::FactorizationType::LU, kkt_mat, tol_);
+            if (!fac || fac->stats().singular) {
+                if (reg >= options_.regularization_max) break;
+                const double bumped = std::min(reg * 10.0, options_.regularization_max);
+                if (std::getenv("HYPERNOVA_QP_DBG"))
+                    std::cerr << "[qp-as] unconstrained KKT singular, regularization "
+                              << reg << " -> " << bumped << "\n";
+                reg = bumped;
+                kkt_regularization_ = reg;
+                continue;
+            }
+            sol = rhs;
+            fac->solve(sol);
+            refinement_sweeps_ += static_cast<std::size_t>(std::max(
+                0, numerical::iterative_refinement(*fac, kkt_mat, sol, rhs)));
+            break;
+        }
+        if (!fac || fac->stats().singular) {
+            return;  // leave x_ unchanged this iteration
+        }
 
         for (std::size_t j = 0; j < nvars; ++j) {
             double lb = problem.variables[j].lower_bound;
@@ -537,15 +538,17 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
             double lb = problem.variables[j].lower_bound;
             double ub = problem.variables[j].upper_bound;
             if (ub - lb <= options_.feasibility_tol) continue;  // pinned
-            if (sol[j] < 0) {
+            if (sol[j] < -1e-12) {
                 if (lb > -std::numeric_limits<double>::infinity()) {
                     double step = (lb - x_[j]) / sol[j];
-                    if (step > 0) max_step = std::min(max_step, step);
+                    if (step <= 0) max_step = 0.0;
+                    else max_step = std::min(max_step, step);
                 }
-            } else if (sol[j] > 0) {
+            } else if (sol[j] > 1e-12) {
                 if (ub < std::numeric_limits<double>::infinity()) {
                     double step = (ub - x_[j]) / sol[j];
-                    if (step > 0) max_step = std::min(max_step, step);
+                    if (step <= 0) max_step = 0.0;
+                    else max_step = std::min(max_step, step);
                 }
             }
         }
@@ -568,7 +571,7 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
         std::vector<numerical::Triplet> triplets;
         triplets.reserve(nvars + 2 * problem.quadratic_terms.size() + 2 * A.nnz());
 
-        std::vector<double> h_diag(nvars, 1e-10);
+        std::vector<double> h_diag(nvars, kkt_regularization_);
         for (const auto& term : problem.quadratic_terms) {
             if (term.row == term.col) {
                 h_diag[term.row] += term.coeff;
@@ -628,8 +631,11 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
         numerical::SparseMatrix kkt_mat = numerical::SparseMatrix::from_triplets(total_now, total_now, triplets);
         kkt_factorization_ = numerical::create_factorization(numerical::FactorizationType::LU, kkt_mat, tol_);
         sol = rhs_now;
-        kkt_factorization_->solve(sol);
-        numerical::iterative_refinement(*kkt_factorization_, kkt_mat, sol, rhs_now);
+        if (kkt_factorization_) {
+            kkt_factorization_->solve(sol);
+            refinement_sweeps_ += static_cast<std::size_t>(std::max(
+                0, numerical::iterative_refinement(*kkt_factorization_, kkt_mat, sol, rhs_now)));
+        }
         return sol;
     };
 
@@ -649,7 +655,8 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
     // a bound). Add that bound as a pin and re-solve so the remaining variables
     // satisfy the active constraints.
     std::vector<double> sol = build_and_solve(pins);
-    {
+    int resolve_passes = 0;
+    while (resolve_passes < 10) {
         std::vector<std::pair<std::size_t, double>> bound_pins;
         bool blocked = false;
         for (std::size_t j = 0; j < nvars; ++j) {
@@ -661,18 +668,38 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
 
             double lb = problem.variables[j].lower_bound;
             double ub = problem.variables[j].upper_bound;
-            double t = x_[j] + sol[j];
-            if (t < lb - options_.feasibility_tol) {
+            if (x_[j] <= lb + options_.feasibility_tol && sol[j] < -1e-12) {
                 bound_pins.emplace_back(j, lb);
                 blocked = true;
-            } else if (t > ub + options_.feasibility_tol) {
+            } else if (x_[j] >= ub - options_.feasibility_tol && sol[j] > 1e-12) {
                 bound_pins.emplace_back(j, ub);
                 blocked = true;
             }
         }
         if (blocked) {
             for (const auto& bp : bound_pins) pins.push_back(bp);
-            sol = build_and_solve(pins);
+            std::vector<double> sol2 = build_and_solve(pins);
+            if (kkt_factorization_ && kkt_factorization_->stats().singular) {
+                // Try once more with increased regularization before giving up
+                // on this pin: the KKT may merely be ill-conditioned.
+                if (kkt_regularization_ < options_.regularization_max) {
+                    kkt_regularization_ =
+                        std::min(kkt_regularization_ * 10.0, options_.regularization_max);
+                    std::vector<double> sol2r = build_and_solve(pins);
+                    if (kkt_factorization_ && !kkt_factorization_->stats().singular) {
+                        sol = sol2r;
+                        ++resolve_passes;
+                        continue;
+                    }
+                }
+                for (std::size_t i = 0; i < bound_pins.size(); ++i) pins.pop_back();
+                break;
+            } else {
+                sol = sol2;
+            }
+            ++resolve_passes;
+        } else {
+            break;
         }
     }
 
@@ -684,15 +711,17 @@ void ActiveSetQPSolver::solve_kkt_system(const model::Problem& problem) {
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
         if (ub - lb <= options_.feasibility_tol) continue;  // pinned
-        if (dx[j] < 0) {
+        if (dx[j] < -1e-12) {
             if (lb > -std::numeric_limits<double>::infinity()) {
                 double step = (lb - x_[j]) / dx[j];
-                if (step > 0) max_step = std::min(max_step, step);
+                if (step <= 0) max_step = 0.0;
+                else max_step = std::min(max_step, step);
             }
-        } else if (dx[j] > 0) {
+        } else if (dx[j] > 1e-12) {
             if (ub < std::numeric_limits<double>::infinity()) {
                 double step = (ub - x_[j]) / dx[j];
-                if (step > 0) max_step = std::min(max_step, step);
+                if (step <= 0) max_step = 0.0;
+                else max_step = std::min(max_step, step);
             }
         }
     }
@@ -990,12 +1019,6 @@ bool ActiveSetQPSolver::projected_gradient_recovery(const model::Problem& proble
 
     bool improved = false;
     auto recovery_start = std::chrono::high_resolution_clock::now();
-    if (std::getenv("HYPERNOVA_DBG_QP")) {
-        std::cerr << "\n[QP-REC] enter recovery x=[";
-        for (double v : x) std::cerr << " " << v;
-        std::cerr << " ] f0=" << best_f << " feas_seed=" << feasible_seed
-                  << " nvars=" << nvars << " ncons=" << problem.constraints.size() << "\n";
-    }
     for (int outer = 0; outer < 400; ++outer) {
         if (options_.interrupt_callback && options_.interrupt_callback()) break;
         if (options_.time_limit_seconds > 0.0) {
@@ -1032,11 +1055,6 @@ bool ActiveSetQPSolver::projected_gradient_recovery(const model::Problem& proble
         if (!moved) break;
     }
 
-    if (std::getenv("HYPERNOVA_DBG_QP")) {
-        std::cerr << "[QP-REC] exit improved=" << improved << " best_f=" << best_f << " x=[";
-        for (double v : best_x) std::cerr << " " << v;
-        std::cerr << " ] viol=" << max_constraint_violation(problem, best_x) << "\n";
-    }
     if (!improved) return false;
 
     x_ = best_x;

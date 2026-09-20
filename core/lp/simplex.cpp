@@ -594,7 +594,7 @@ try {
         return result;
     }
 
-    if (warm_var_status && warm_var_status->size() == problem_->variables.size()) {
+    if (warm_var_status && warm_var_status->size() == n_original_vars_) {
         initialize_basis_with_warm_start(*problem_, *warm_var_status, warm_con_status);
     } else {
         initialize_basis(*problem_);
@@ -716,7 +716,7 @@ try {
                 prev_obj = this_obj;
             } else {
                 ++stall;
-                if (stall >= options_.perturbation_iterations && !perturbed_ && !phase1_active_) {
+                if (stall >= options_.perturbation_iterations && !perturbed_) {
                     apply_perturbation();
                     prev_obj = compute_obj();
                     stall = 0;
@@ -1082,7 +1082,7 @@ void SimplexSolver::initialize_basis_with_warm_start(const model::Problem& probl
     }
 
     std::vector<std::size_t> basic_candidates;
-    for (std::size_t j = 0; j < nvars; ++j) {
+    for (std::size_t j = 0; j < var_status.size(); ++j) {
         if (var_status[j] == 1) {
             basic_candidates.push_back(j);
         } else if (var_status[j] == 0 && con_status == nullptr) {
@@ -1320,41 +1320,46 @@ int SimplexSolver::select_leaving_variable(int entering) {
         return ratio >= -tol_.feasibility_tol() ? (ratio = 0.0, true) : false;
     };
     if (options_.ratio_test == RatioTest::HARRIS_TWO_PASS) {
-        // Pass 1: smallest ratio, tolerating small primal infeasibility.
-        double best_ratio = std::numeric_limits<double>::infinity();
+        // Corrected Harris two-pass ratio test
+        double theta_max = std::numeric_limits<double>::infinity();
         int best_row = -1;
-        std::vector<int> band_rows;  // Harris pass-2 relaxation band
-        std::vector<double> band_pivots;
+        
+        // Pass 1: maximum allowed step size tolerating bound violation up to feasibility_tol
         for (std::size_t i = 0; i < ncons; ++i) {
             const double aij = d[i];
             if (aij <= tol_.pivot_tol()) continue;
-            double ratio;
-            if (!relaxed_ratio(i, aij, ratio)) continue;
-            if (ratio < best_ratio) {
-                best_ratio = ratio;
-                best_row = static_cast<int>(i);
+            // Ignore variables that are already heavily infeasible (they stay in basis until fixed)
+            if (basic_solution_[i] < -tol_.feasibility_tol()) continue;
+            
+            // max step size = (value + tolerance) / aij
+            double max_step = (std::max(0.0, basic_solution_[i]) + tol_.feasibility_tol()) / aij;
+            if (max_step < theta_max) {
+                theta_max = max_step;
             }
         }
+        
+        // Pass 2: among candidates whose exact ratio is <= theta_max, pick the largest pivot
+        double best_pivot = 0.0;
+        for (std::size_t i = 0; i < ncons; ++i) {
+            const double aij = d[i];
+            if (aij <= tol_.pivot_tol()) continue;
+            
+            double ratio;
+            if (!relaxed_ratio(i, aij, ratio)) continue;
+            
+            if (ratio <= theta_max) {
+                if (best_row < 0 || aij > best_pivot + tol_.zero_tol()) {
+                    best_pivot = aij;
+                    best_row = static_cast<int>(i);
+                }
+            }
+        }
+        
         if (best_row < 0) {
             pivot_direction_.clear();
             last_leaving_ = -1;
             last_entering_ = -1;
             return -1;
-        }
-
-        // Pass 2 (Harris): within alpha of the best ratio, choose the largest
-        // pivot coefficient; this absorbs degeneracy and reduces round-off.
-        const double alpha = tol_.feasibility_tol() * std::max(1.0, std::abs(best_ratio));
-        double best_pivot = d[static_cast<std::size_t>(best_row)];
-        for (std::size_t i = 0; i < ncons; ++i) {
-            const double aij = d[i];
-            if (aij <= tol_.pivot_tol()) continue;
-            double ratio;
-            if (!relaxed_ratio(i, aij, ratio)) continue;
-            if (ratio <= best_ratio + alpha && aij > best_pivot + tol_.zero_tol()) {
-                best_pivot = aij;
-                best_row = static_cast<int>(i);
-            }
         }
 
         pivot_direction_ = std::move(d);

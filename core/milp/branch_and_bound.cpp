@@ -417,6 +417,7 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
 
     model::ProblemStatus relax_status = model::ProblemStatus::UNKNOWN;
     std::vector<double> relax_primal;
+    std::vector<double> relax_reduced_costs;
     double relax_objective = 0.0;
 
     if (options_.qp_relaxation) {
@@ -475,6 +476,7 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
         }
         relax_status = lp_result.status;
         relax_primal = std::move(lp_result.primal);
+        relax_reduced_costs = std::move(lp_result.reduced_costs);
         relax_objective = lp_result.objective_value;
     }
 
@@ -487,6 +489,58 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
         }
         node.lp_solved = true;
         node.status = model::ProblemStatus::OPTIMAL;
+
+        // Apply LP-relaxation-aware reduced-cost fixing (Dual Reductions)
+        if (best_objective_ < std::numeric_limits<double>::infinity() && 
+            problem.quadratic_terms.empty() && 
+            !relax_reduced_costs.empty()) {
+            
+            double gap = best_objective_ - node.lower_bound;
+            if (gap >= 0.0) {
+                for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+                    // Only original variables, skip slack/aux variables if they were somehow included,
+                    // but relax_reduced_costs aligns with node_problem variables.
+                    // We only tighten bounds for the original problem variables (j < problem.variables.size()).
+                    if (j >= relax_reduced_costs.size()) continue;
+
+                    double rc_j = relax_reduced_costs[j];
+                    double eff_rc = (problem.obj_sense == model::ObjectiveSense::MINIMIZE) ? rc_j : -rc_j;
+                    
+                    if (std::abs(eff_rc) > tol_.feasibility_tol()) {
+                        double delta_max = gap / std::abs(eff_rc);
+                        double lp_val = node.lp_solution[j];
+                        
+                        double lb = problem.variables[j].lower_bound;
+                        double ub = problem.variables[j].upper_bound;
+                        for (const auto& bc : node.bounds) {
+                            if (bc.var == j) {
+                                if (bc.is_lower) { if (bc.value > lb) lb = bc.value; }
+                                else { if (bc.value < ub) ub = bc.value; }
+                            }
+                        }
+                        
+                        if (eff_rc > 0.0) {
+                            double new_ub = lp_val + delta_max;
+                            if (problem.variables[j].type != model::VarType::CONTINUOUS) {
+                                new_ub = std::floor(new_ub + tol_.feasibility_tol());
+                            }
+                            if (new_ub < ub - tol_.feasibility_tol()) {
+                                node.bounds.push_back({j, new_ub, false});
+                            }
+                        } else {
+                            double new_lb = lp_val - delta_max;
+                            if (problem.variables[j].type != model::VarType::CONTINUOUS) {
+                                new_lb = std::ceil(new_lb - tol_.feasibility_tol());
+                            }
+                            if (new_lb > lb + tol_.feasibility_tol()) {
+                                node.bounds.push_back({j, new_lb, true});
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         return true;
     }
     // INFEASIBLE / UNBOUNDED: the node is certified infeasible (or the

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "qp_common.hpp"
 #include "../model/problem.hpp"
 #include "../numerical/tolerance.hpp"
 #include "../numerical/sparse_matrix.hpp"
@@ -18,6 +19,10 @@ struct ActiveSetOptions {
     double optimality_tol = 1e-9;
     bool warm_start = true;
     bool check_convexity = true;
+    // Baseline H + delta*I regularization for the KKT solves; bumped up to
+    // regularization_max when a factorization reports a singular pivot.
+    double regularization = 1e-10;
+    double regularization_max = 1e-4;
     std::function<bool()> interrupt_callback;
 };
 
@@ -29,6 +34,10 @@ struct ActiveSetResult {
     std::vector<int> active_set;
     std::size_t iterations = 0;
     double solve_time_ms = 0.0;
+    // Convexity of the (minimized) Hessian.
+    ConvexityClassification convexity = ConvexityClassification::UNKNOWN;
+    // Total iterative-refinement correction sweeps across all KKT solves.
+    std::size_t refinement_sweeps = 0;
 };
 
 class ActiveSetQPSolver {
@@ -50,6 +59,9 @@ private:
     std::vector<double> lambda_;
     std::vector<int> active_set_;
     std::unique_ptr<numerical::SparseFactorization> kkt_factorization_;
+    ConvexityClassification last_convexity_ = ConvexityClassification::UNKNOWN;
+    double kkt_regularization_ = 1e-10;
+    std::size_t refinement_sweeps_ = 0;
 
     void initialize(const model::Problem& problem);
     bool check_convexity(const model::Problem& problem);

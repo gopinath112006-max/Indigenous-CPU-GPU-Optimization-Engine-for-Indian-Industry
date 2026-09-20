@@ -338,7 +338,7 @@ class Solver:
                     data = json.load(f)
                 return Solution(data)
             else:
-                return Solution({"status": "OPTIMAL" if proc.returncode == 0 else "FAILED"})
+                raise RuntimeError(f"Solver failed to produce a report. Exit code: {proc.returncode}. Stderr: {proc.stderr}")
         finally:
             if os.path.exists(tmp_lp):
                 os.remove(tmp_lp)

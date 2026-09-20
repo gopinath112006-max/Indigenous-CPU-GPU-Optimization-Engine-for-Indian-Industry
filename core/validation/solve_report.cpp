@@ -33,6 +33,8 @@ nlohmann::json SolveReport::to_json() const {
     j["dual_infeasibility"] = dual_infeasibility;
     j["complementarity"] = complementarity;
     j["integrality_violation"] = integrality_violation;
+    j["is_feasible"] = is_feasible;
+    j["optimality_proven"] = optimality_proven;
     j["engine_used"] = engine_used;
     j["gpu_used"] = gpu_used;
     j["threads_used"] = threads_used;
@@ -69,6 +71,8 @@ SolveReport SolveReport::from_json(const nlohmann::json& j) {
     report.dual_infeasibility = j.value("dual_infeasibility", 0.0);
     report.complementarity = j.value("complementarity", 0.0);
     report.integrality_violation = j.value("integrality_violation", 0.0);
+    report.is_feasible = j.value("is_feasible", false);
+    report.optimality_proven = j.value("optimality_proven", false);
     report.engine_used = j.value("engine_used", "");
     report.gpu_used = j.value("gpu_used", false);
     report.threads_used = j.value("threads_used", 1);
@@ -98,6 +102,8 @@ std::string SolveReport::to_string() const {
     oss << "Cuts Added:      " << cuts_added << "\n";
     oss << "Solve Time (ms): " << solve_time_ms << "\n";
     oss << "Total Time (ms): " << total_time_ms << "\n";
+    oss << "Feasible:        " << (is_feasible ? "Yes" : "No") << "\n";
+    oss << "Opt Proven:      " << (optimality_proven ? "Yes" : "No") << "\n";
     oss << "Engine:          " << engine_used << "\n";
     oss << "GPU Used:        " << (gpu_used ? "Yes" : "No") << "\n";
     oss << "Threads:         " << threads_used << "\n";

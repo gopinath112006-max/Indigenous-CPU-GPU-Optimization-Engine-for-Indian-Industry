@@ -141,7 +141,7 @@ auto solve_dispatch = [&](const model::Problem& target) {
         if (target.is_lp()) {
             if (pimpl_->options.engine == EngineType::INTERIOR_POINT ||
                 (pimpl_->options.engine == EngineType::AUTO &&
-                 target.variables.size() > 10000)) {
+                 target.variables.size() >= 10000)) {
                 lp::InteriorPointOptions ipm_opts;
                 ipm_opts.time_limit_seconds = dispatch_budget;
                 ipm_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };

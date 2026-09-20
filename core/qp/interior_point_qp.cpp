@@ -4,10 +4,18 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <iostream>
 #include <stdexcept>
 #include <numeric>
 
 namespace hypernova::qp {
+
+namespace {
+constexpr double INF = std::numeric_limits<double>::infinity();
+constexpr std::size_t NPOS = std::numeric_limits<std::size_t>::max();
+constexpr double STEP_SAFETY = 0.995;
+constexpr double MIN_BARRIER_VALUE = 1e-4;
+} // namespace
 
 InteriorPointQPSolver::InteriorPointQPSolver(const numerical::ToleranceConfig& tol, const InteriorPointQPOptions& options)
     : tol_(tol), options_(options) {}
@@ -18,7 +26,7 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
     InteriorPointQPResult result;
     std::size_t nvars = problem.variables.size();
 
-    if (!problem.is_qp() && !problem.is_miqp()) {
+    if (nvars == 0 || (!problem.is_qp() && !problem.is_miqp())) {
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
         return result;
     }
@@ -37,16 +45,33 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
         }
     }
 
-    if (options_.check_convexity && !check_convexity(minimized)) {
-        result.status = model::ProblemStatus::NUMERICAL_ERROR;
-        return result;
+    if (options_.check_convexity) {
+        result.convexity = classify_qp_convexity(minimized, tol_);
+        if (result.convexity == ConvexityClassification::NONCONVEX) {
+            result.status = model::ProblemStatus::NUMERICAL_ERROR;
+            return result;
+        }
+    }
+
+    for (const auto& var : minimized.variables) {
+        if (var.lower_bound > var.upper_bound + tol_.feasibility_tol()) {
+            result.status = model::ProblemStatus::INFEASIBLE;
+            return result;
+        }
     }
 
     try {
+        sweep_total_ = 0;
+        reg_retries_ = 0;
+        final_regularization_ = options_.regularization;
+        kkt_step_ok_ = true;
+
         initialize(minimized);
 
         bool time_up = false;
         bool had_interrupt = false;
+        int stall_count = 0;
+
         for (std::size_t iter = 0; iter < static_cast<std::size_t>(options_.max_iterations); ++iter) {
             if (options_.interrupt_callback && options_.interrupt_callback()) {
                 had_interrupt = true;
@@ -60,6 +85,7 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
                     break;
                 }
             }
+
             double mu = compute_mu();
             if (check_convergence(minimized, mu)) {
                 result.status = model::ProblemStatus::OPTIMAL;
@@ -67,19 +93,41 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
             }
 
             compute_affine_step(minimized);
-            double mu_aff = compute_mu();
-            double sigma = (mu_aff / mu) * (mu_aff / mu) * (mu_aff / mu);
-            sigma = std::clamp(sigma, 0.1, 0.9);
-
+            if (!kkt_step_ok_) {
+                kkt_step_ok_ = true;
+                result.status = model::ProblemStatus::NUMERICAL_ERROR;
+                break;
+            }
+            double sigma = compute_sigma(mu);
             compute_centering_step(minimized, mu, sigma);
 
-            double alpha_p = compute_alpha(x_, dx_);
-            double alpha_d = compute_alpha(s_, ds_);
+            double alpha_p = STEP_SAFETY * compute_alpha_primal();
+            double alpha_d = STEP_SAFETY * compute_alpha_dual();
 
-            alpha_p = std::min(1.0, 0.99 * alpha_p);
-            alpha_d = std::min(1.0, 0.99 * alpha_d);
+            if (alpha_p <= 1e-12 && alpha_d <= 1e-12) {
+                ++stall_count;
+            } else {
+                stall_count = 0;
+            }
+            if (stall_count >= 5) {
+                result.status = model::ProblemStatus::NUMERICAL_ERROR;
+                break;
+            }
 
             update_variables(alpha_p, alpha_d);
+
+            bool nonfinite = false;
+            for (std::size_t j = 0; j < x_.size() && !nonfinite; ++j) {
+                if (!std::isfinite(x_[j])) nonfinite = true;
+            }
+            for (std::size_t j = 0; j < y_.size() && !nonfinite; ++j) {
+                if (!std::isfinite(y_[j])) nonfinite = true;
+            }
+            if (nonfinite) {
+                result.status = model::ProblemStatus::NUMERICAL_ERROR;
+                break;
+            }
+
             result.iterations = iter + 1;
         }
 
@@ -91,7 +139,22 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
 
         result.primal = x_;
         result.dual = y_;
-        result.slack = s_;
+        result.refinement_sweeps = sweep_total_;
+        result.regularization_retries = reg_retries_;
+
+        const auto& A = minimized.constraint_matrix;
+        result.slack.assign(ncons_, 0.0);
+        for (std::size_t i = 0; i < ncons_; ++i) {
+            double sum = 0.0;
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                sum += A.values()[k] * x_[A.col_indices()[k]];
+            }
+            if (minimized.constraints[i].sense == model::ConstraintSense::LE) {
+                result.slack[i] = minimized.constraints[i].rhs - sum;
+            } else if (minimized.constraints[i].sense == model::ConstraintSense::GE) {
+                result.slack[i] = sum - minimized.constraints[i].rhs;
+            }
+        }
 
         result.objective_value = 0.0;
         for (std::size_t j = 0; j < nvars; ++j) {
@@ -115,6 +178,7 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
         result.solve_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
 
     } catch (const std::exception& e) {
+        (void)e;
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
     }
 
@@ -122,273 +186,538 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
 }
 
 void InteriorPointQPSolver::initialize(const model::Problem& problem) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
+    nvars_ = problem.variables.size();
+    ncons_ = problem.constraints.size();
 
-    x_.assign(nvars, 1.0);
-    y_.assign(ncons, 0.0);
-    z_.assign(nvars, 1.0);
-    s_.assign(nvars, 1.0);
+    lb_var_.clear();
+    lb_val_.clear();
+    ub_var_.clear();
+    ub_val_.clear();
+    lb_idx_of_.assign(nvars_, NPOS);
+    ub_idx_of_.assign(nvars_, NPOS);
 
-    for (std::size_t j = 0; j < nvars; ++j) {
+    for (std::size_t j = 0; j < nvars_; ++j) {
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
-
-        if (lb > -std::numeric_limits<double>::infinity() &&
-            ub < std::numeric_limits<double>::infinity()) {
-            x_[j] = (lb + ub) / 2.0;
-        } else if (lb > -std::numeric_limits<double>::infinity()) {
-            x_[j] = lb + 1.0;
-        } else if (ub < std::numeric_limits<double>::infinity()) {
-            x_[j] = ub - 1.0;
+        if (lb > -INF) {
+            lb_idx_of_[j] = lb_var_.size();
+            lb_var_.push_back(j);
+            lb_val_.push_back(lb);
         }
-
-        x_[j] = std::max(x_[j], lb + 1e-4);
-        x_[j] = std::min(x_[j], ub - 1e-4);
-        s_[j] = 1.0;
-        z_[j] = 1.0;
-    }
-}
-
-bool InteriorPointQPSolver::check_convexity(const model::Problem& problem) {
-    if (problem.quadratic_terms.empty()) return true;
-
-    std::size_t nvars = problem.variables.size();
-    std::vector<numerical::Triplet> triplets;
-    triplets.reserve(problem.quadratic_terms.size());
-    for (const auto& term : problem.quadratic_terms) {
-        if (term.row == term.col) {
-            triplets.emplace_back(term.row, term.col, term.coeff);
-        } else {
-            triplets.emplace_back(term.row, term.col, term.coeff);
-            triplets.emplace_back(term.col, term.row, term.coeff);
+        if (ub < INF) {
+            ub_idx_of_[j] = ub_var_.size();
+            ub_var_.push_back(j);
+            ub_val_.push_back(ub);
         }
     }
+    n_lb_ = lb_var_.size();
+    n_ub_ = ub_var_.size();
 
-    numerical::SparseMatrix q_mat = numerical::SparseMatrix::from_triplets(nvars, nvars, triplets);
-    auto ldlt = numerical::create_factorization(numerical::FactorizationType::LDLT, q_mat, tol_);
-    if (!ldlt) return false;
-
-    for (double d : ldlt->D_values()) {
-        if (d < -std::max(options_.regularization, tol_.singular_tol())) return false;
+    ineq_row_.clear();
+    ineq_sigma_.clear();
+    ineq_idx_of_.assign(ncons_, NPOS);
+    for (std::size_t i = 0; i < ncons_; ++i) {
+        if (problem.constraints[i].sense == model::ConstraintSense::LE) {
+            ineq_idx_of_[i] = ineq_row_.size();
+            ineq_row_.push_back(i);
+            ineq_sigma_.push_back(1);
+        } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
+            ineq_idx_of_[i] = ineq_row_.size();
+            ineq_row_.push_back(i);
+            ineq_sigma_.push_back(-1);
+        }
     }
-    return true;
+    n_ineq_ = ineq_row_.size();
+
+    x_.assign(nvars_, 1.0);
+    for (std::size_t j = 0; j < nvars_; ++j) {
+        double lb = problem.variables[j].lower_bound;
+        double ub = problem.variables[j].upper_bound;
+        double xj = 1.0;
+        if (lb > -INF && ub < INF) {
+            xj = (lb + ub) / 2.0;
+        } else if (lb > -INF) {
+            xj = lb + 1.0;
+        } else if (ub < INF) {
+            xj = ub - 1.0;
+        }
+        if (lb > -INF) xj = std::max(xj, lb + 1e-4);
+        if (ub < INF) xj = std::min(xj, ub - 1e-4);
+        x_[j] = xj;
+    }
+
+    sl_.assign(n_lb_, 1.0);
+    su_.assign(n_ub_, 1.0);
+    g_.assign(n_ineq_, 1.0);
+    lambdal_.assign(n_lb_, 1.0);
+    lambdau_.assign(n_ub_, 1.0);
+    lambdag_.assign(n_ineq_, 1.0);
+
+    for (std::size_t l = 0; l < n_lb_; ++l) {
+        sl_[l] = std::max(x_[lb_var_[l]] - lb_val_[l], MIN_BARRIER_VALUE);
+    }
+    for (std::size_t u = 0; u < n_ub_; ++u) {
+        su_[u] = std::max(ub_val_[u] - x_[ub_var_[u]], MIN_BARRIER_VALUE);
+    }
+    const auto& A = problem.constraint_matrix;
+    for (std::size_t k = 0; k < n_ineq_; ++k) {
+        std::size_t i = ineq_row_[k];
+        double sum = 0.0;
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            sum += A.values()[t] * x_[A.col_indices()[t]];
+        }
+        double gval = (ineq_sigma_[k] > 0) ? (problem.constraints[i].rhs - sum)
+                                           : (sum - problem.constraints[i].rhs);
+        g_[k] = std::max(gval, MIN_BARRIER_VALUE);
+    }
+
+    y_.assign(ncons_, 0.0);
+
+    dx_.assign(nvars_, 0.0);
+    dy_.assign(ncons_, 0.0);
+    dsl_.assign(n_lb_, 0.0);
+    dsu_.assign(n_ub_, 0.0);
+    dg_.assign(n_ineq_, 0.0);
+    dlambdal_.assign(n_lb_, 0.0);
+    dlambdau_.assign(n_ub_, 0.0);
+    dlambdag_.assign(n_ineq_, 0.0);
 }
+
+
 
 double InteriorPointQPSolver::compute_mu() const {
+    const std::size_t k = comp_count();
+    if (k == 0) return 0.0;
     double sum = 0.0;
-    for (std::size_t j = 0; j < x_.size(); ++j) {
-        sum += x_[j] * z_[j] + s_[j] * z_[j];
+    for (std::size_t l = 0; l < n_lb_; ++l) sum += sl_[l] * lambdal_[l];
+    for (std::size_t u = 0; u < n_ub_; ++u) sum += su_[u] * lambdau_[u];
+    for (std::size_t g = 0; g < n_ineq_; ++g) sum += g_[g] * lambdag_[g];
+    return sum / static_cast<double>(k);
+}
+
+double InteriorPointQPSolver::compute_sigma(double mu) const {
+    const std::size_t k = comp_count();
+    if (k == 0 || mu <= 0.0) return 0.0;
+
+    double ap = compute_alpha_pair(sl_, dsl_);
+    ap = std::min(ap, compute_alpha_pair(su_, dsu_));
+    ap = std::min(ap, compute_alpha_pair(g_, dg_));
+    ap = std::min(ap, 1.0);
+
+    double ad = compute_alpha_pair(lambdal_, dlambdal_);
+    ad = std::min(ad, compute_alpha_pair(lambdau_, dlambdau_));
+    ad = std::min(ad, compute_alpha_pair(lambdag_, dlambdag_));
+    ad = std::min(ad, 1.0);
+
+    double sum = 0.0;
+    for (std::size_t l = 0; l < n_lb_; ++l) {
+        sum += (sl_[l] + ap * dsl_[l]) * (lambdal_[l] + ad * dlambdal_[l]);
     }
-    return sum / (2.0 * x_.size());
+    for (std::size_t u = 0; u < n_ub_; ++u) {
+        sum += (su_[u] + ap * dsu_[u]) * (lambdau_[u] + ad * dlambdau_[u]);
+    }
+    for (std::size_t g = 0; g < n_ineq_; ++g) {
+        sum += (g_[g] + ap * dg_[g]) * (lambdag_[g] + ad * dlambdag_[g]);
+    }
+    double mu_aff = sum / static_cast<double>(k);
+
+    double ratio = mu_aff / mu;
+    double sigma = ratio * ratio * ratio;
+    return std::clamp(sigma, 0.1, 0.9);
+}
+
+void InteriorPointQPSolver::assemble_kkt(const model::Problem& problem, double regularization) {
+    const std::size_t n = nvars_;
+    const std::size_t nc = ncons_;
+    const std::size_t pl = n_lb_;
+    const std::size_t pu = n_ub_;
+    const std::size_t pg = n_ineq_;
+    const std::size_t dyn = n + nc;
+    const std::size_t dsl_off = dyn;
+    const std::size_t dsu_off = dyn + pl;
+    const std::size_t dg_off = dyn + pl + pu;
+    const std::size_t dl_off = dyn + pl + pu + pg;
+    const std::size_t du_off = dl_off + pl;
+    const std::size_t dgdual_off = du_off + pu;
+    const std::size_t N = kkt_size();
+
+    std::vector<numerical::Triplet> tris;
+    tris.reserve(n + 2 * problem.quadratic_terms.size() + 2 * problem.constraint_matrix.nnz() +
+                  4 * (pl + pu + pg) + 2 * pg);
+
+    // H + regularization*I on the primal block; the diagonal regularization is
+    // the mechanism used to keep an ill-conditioned KKT solvable.
+    std::vector<double> h_diag(n, regularization);
+    for (const auto& term : problem.quadratic_terms) {
+        if (term.row == term.col) {
+            h_diag[term.row] += term.coeff;
+        } else {
+            tris.emplace_back(term.row, term.col, term.coeff);
+            tris.emplace_back(term.col, term.row, term.coeff);
+        }
+    }
+
+    const auto& A = problem.constraint_matrix;
+
+    // Stationarity-x rows: H, A^T, -lambdal, +lambdau.
+    for (std::size_t j = 0; j < n; ++j) {
+        tris.emplace_back(j, j, h_diag[j]);
+    }
+    for (std::size_t i = 0; i < nc; ++i) {
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            std::size_t j = A.col_indices()[t];
+            double v = A.values()[t];
+            tris.emplace_back(j, n + i, v);      // Rx row j w.r.t. dy_i
+            tris.emplace_back(n + i, j, v);      // Rc row i w.r.t. dx_j
+        }
+    }
+    for (std::size_t l = 0; l < pl; ++l) {
+        tris.emplace_back(lb_var_[l], dl_off + l, -1.0);
+    }
+    for (std::size_t u = 0; u < pu; ++u) {
+        tris.emplace_back(ub_var_[u], du_off + u, 1.0);
+    }
+
+    // Constraint rows: +sigma on the slack g.
+    for (std::size_t k = 0; k < pg; ++k) {
+        std::size_t i = ineq_row_[k];
+        tris.emplace_back(n + i, dg_off + k, static_cast<double>(ineq_sigma_[k]));
+    }
+
+    // Bound-definition rows: sl - x = -lb, su + x = ub.
+    for (std::size_t l = 0; l < pl; ++l) {
+        tris.emplace_back(dyn + l, lb_var_[l], -1.0);
+        tris.emplace_back(dyn + l, dsl_off + l, 1.0);
+    }
+    for (std::size_t u = 0; u < pu; ++u) {
+        tris.emplace_back(dyn + pl + u, ub_var_[u], 1.0);
+        tris.emplace_back(dyn + pl + u, dsu_off + u, 1.0);
+    }
+
+    // Slack-g stationarity rows: sigma*y - lambdag = 0.
+    for (std::size_t k = 0; k < pg; ++k) {
+        std::size_t i = ineq_row_[k];
+        tris.emplace_back(dyn + pl + pu + k, n + i, static_cast<double>(ineq_sigma_[k]));
+        tris.emplace_back(dyn + pl + pu + k, dgdual_off + k, -1.0);
+    }
+
+    // Barrier complementarity rows.
+    for (std::size_t l = 0; l < pl; ++l) {
+        tris.emplace_back(dl_off + l, dsl_off + l, lambdal_[l]);
+        tris.emplace_back(dl_off + l, dl_off + l, sl_[l]);
+    }
+    for (std::size_t u = 0; u < pu; ++u) {
+        tris.emplace_back(du_off + u, dsu_off + u, lambdau_[u]);
+        tris.emplace_back(du_off + u, du_off + u, su_[u]);
+    }
+    for (std::size_t g = 0; g < pg; ++g) {
+        tris.emplace_back(dgdual_off + g, dg_off + g, lambdag_[g]);
+        tris.emplace_back(dgdual_off + g, dgdual_off + g, g_[g]);
+    }
+
+    kkt_mat_ = numerical::SparseMatrix::from_triplets(N, N, tris);
+}
+
+void InteriorPointQPSolver::form_affine_rhs(const model::Problem& problem, std::vector<double>& rhs) const {
+    const std::size_t n = nvars_;
+    const std::size_t nc = ncons_;
+    const std::size_t pl = n_lb_;
+    const std::size_t pu = n_ub_;
+    const std::size_t pg = n_ineq_;
+    const std::size_t dyn = n + nc;
+    const std::size_t dl_off = dyn + pl + pu + pg;
+    const std::size_t du_off = dl_off + pl;
+    const std::size_t dgdual_off = du_off + pu;
+
+    rhs.assign(kkt_size(), 0.0);
+
+    std::vector<double> grad(n, 0.0);
+    for (std::size_t j = 0; j < n; ++j) {
+        grad[j] = problem.variables[j].objective_coeff;
+    }
+    for (const auto& term : problem.quadratic_terms) {
+        grad[term.row] += term.coeff * x_[term.col];
+        if (term.col != term.row) grad[term.col] += term.coeff * x_[term.row];
+    }
+
+    const auto& A = problem.constraint_matrix;
+    for (std::size_t i = 0; i < nc; ++i) {
+        double yi = y_[i];
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            grad[A.col_indices()[t]] += A.values()[t] * yi;
+        }
+    }
+
+    for (std::size_t j = 0; j < n; ++j) {
+        double g = grad[j];
+        if (lb_idx_of_[j] != NPOS) g -= lambdal_[lb_idx_of_[j]];
+        if (ub_idx_of_[j] != NPOS) g += lambdau_[ub_idx_of_[j]];
+        rhs[j] = -g;
+    }
+
+    for (std::size_t i = 0; i < nc; ++i) {
+        double sum = 0.0;
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            sum += A.values()[t] * x_[A.col_indices()[t]];
+        }
+        if (ineq_idx_of_[i] != NPOS) {
+            std::size_t k = ineq_idx_of_[i];
+            sum += static_cast<double>(ineq_sigma_[k]) * g_[k];
+        }
+        rhs[n + i] = -(sum - problem.constraints[i].rhs);
+    }
+
+    for (std::size_t l = 0; l < pl; ++l) {
+        rhs[dyn + l] = -sl_[l] + x_[lb_var_[l]] - lb_val_[l];
+    }
+    for (std::size_t u = 0; u < pu; ++u) {
+        rhs[dyn + pl + u] = -su_[u] - x_[ub_var_[u]] + ub_val_[u];
+    }
+    for (std::size_t k = 0; k < pg; ++k) {
+        std::size_t i = ineq_row_[k];
+        rhs[dyn + pl + pu + k] = -static_cast<double>(ineq_sigma_[k]) * y_[i] + lambdag_[k];
+    }
+
+    for (std::size_t l = 0; l < pl; ++l) {
+        rhs[dl_off + l] = -sl_[l] * lambdal_[l];
+    }
+    for (std::size_t u = 0; u < pu; ++u) {
+        rhs[du_off + u] = -su_[u] * lambdau_[u];
+    }
+    for (std::size_t g = 0; g < pg; ++g) {
+        rhs[dgdual_off + g] = -g_[g] * lambdag_[g];
+    }
+}
+
+void InteriorPointQPSolver::unpack_directions(const std::vector<double>& sol) {
+    const std::size_t n = nvars_;
+    const std::size_t nc = ncons_;
+    const std::size_t pl = n_lb_;
+    const std::size_t pu = n_ub_;
+    const std::size_t pg = n_ineq_;
+    const std::size_t dyn = n + nc;
+    const std::size_t dsl_off = dyn;
+    const std::size_t dsu_off = dyn + pl;
+    const std::size_t dg_off = dyn + pl + pu;
+    const std::size_t dl_off = dyn + pl + pu + pg;
+    const std::size_t du_off = dl_off + pl;
+    const std::size_t dgdual_off = du_off + pu;
+
+    dx_.assign(sol.begin(), sol.begin() + n);
+    dy_.assign(sol.begin() + n, sol.begin() + dyn);
+    dsl_.assign(sol.begin() + dsl_off, sol.begin() + dsu_off);
+    dsu_.assign(sol.begin() + dsu_off, sol.begin() + dg_off);
+    dg_.assign(sol.begin() + dg_off, sol.begin() + dl_off);
+    dlambdal_.assign(sol.begin() + dl_off, sol.begin() + du_off);
+    dlambdau_.assign(sol.begin() + du_off, sol.begin() + dgdual_off);
+    dlambdag_.assign(sol.begin() + dgdual_off, sol.end());
 }
 
 void InteriorPointQPSolver::compute_affine_step(const model::Problem& problem) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
-    std::size_t total = nvars + ncons + nvars;
+    // Adaptive H + delta*I regularization: start at options_.regularization and,
+    // if the KKT factorization is singular or iterative refinement cannot drive
+    // the relative residual down, bump delta (capped at regularization_max) and
+    // re-factorize.  A large static delta is never used; the residual check
+    // verifies each accepted solve.
+    double reg = options_.regularization;
+    const std::size_t max_attempts = 8;
+    for (std::size_t attempt = 0; attempt < max_attempts; ++attempt) {
+        assemble_kkt(problem, reg);
 
-    std::vector<double> rhs(total, 0.0);
-    form_kkt_system(problem, rhs);
+        std::vector<double> rhs(kkt_size(), 0.0);
+        form_affine_rhs(problem, rhs);
+        std::vector<double> sol = rhs;
 
-    std::vector<double> sol(total, 0.0);
-    solve_kkt_system(problem, rhs, sol);
+        kkt_factorization_ = numerical::create_factorization(numerical::FactorizationType::LU, kkt_mat_, tol_);
+        if (kkt_factorization_) {
+            kkt_factorization_->solve(sol);
+            sweep_total_ += static_cast<std::size_t>(std::max(
+                0, numerical::iterative_refinement(*kkt_factorization_, kkt_mat_, sol, rhs, 1e-10, 5)));
 
-    dx_.assign(nvars, 0.0);
-    dy_.assign(ncons, 0.0);
-    dz_.assign(nvars, 0.0);
-    ds_.assign(nvars, 0.0);
+            // Residual verification: accept the solve only when the relative
+            // max-norm residual is small.  The LU "singular" flag is expected
+            // to trip benignly on the saddle KKT as the barrier tightens, so it
+            // is not a rejection signal on its own; a residual that refuses to
+            // converge is.
+            if (kkt_relative_residual(sol, rhs) <= 1e-8) {
+                final_regularization_ = reg;
+                unpack_directions(sol);
+                return;
+            }
+        }
 
-    for (std::size_t j = 0; j < nvars; ++j) dx_[j] = sol[j];
-    for (std::size_t i = 0; i < ncons; ++i) dy_[i] = sol[nvars + i];
-    for (std::size_t j = 0; j < nvars; ++j) dz_[j] = sol[nvars + ncons + j];
-    for (std::size_t j = 0; j < nvars; ++j) ds_[j] = (-x_[j] * dz_[j] - x_[j] * z_[j]) / z_[j];
+        if (reg >= options_.regularization_max) break;
+        const double bumped = std::min(reg * 10.0, options_.regularization_max);
+        ++reg_retries_;
+        if (std::getenv("HYPERNOVA_QP_DBG")) {
+            std::cerr << "[qp-ipm] KKT residual not converged"
+                      << " (singular=" << (kkt_factorization_ && kkt_factorization_->stats().singular ? 1 : 0)
+                      << ") regularization " << reg << " -> " << bumped << "\n";
+        }
+        reg = bumped;
+    }
+
+    kkt_step_ok_ = false;
+}
+
+double InteriorPointQPSolver::kkt_relative_residual(const std::vector<double>& sol,
+                                                    const std::vector<double>& rhs) const {
+    if (rhs.empty()) return 0.0;
+    std::vector<double> kx = kkt_mat_.multiply(sol);
+    double max_res = 0.0;
+    double max_rhs = 0.0;
+    for (std::size_t i = 0; i < rhs.size(); ++i) {
+        max_res = std::max(max_res, std::abs(kx[i] - rhs[i]));
+        max_rhs = std::max(max_rhs, std::abs(rhs[i]));
+    }
+    return max_res / std::max(1e-300, max_rhs);
 }
 
 void InteriorPointQPSolver::compute_centering_step(const model::Problem& problem, double mu, double sigma) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
-    std::size_t total = nvars + ncons + nvars;
+    const std::size_t pl = n_lb_;
+    const std::size_t pu = n_ub_;
+    const std::size_t pg = n_ineq_;
+    const std::size_t dyn = nvars_ + ncons_;
+    const std::size_t dl_off = dyn + pl + pu + pg;
+    const std::size_t du_off = dl_off + pl;
+    const std::size_t dgdual_off = du_off + pu;
 
-    std::vector<double> rhs(total, 0.0);
+    std::vector<double> rhs(kkt_size(), 0.0);
+    form_affine_rhs(problem, rhs);
 
-    for (std::size_t j = 0; j < nvars; ++j) {
-        rhs[j] = 0.0;
+    // Mehrotra corrector: complementarity RHS becomes
+    // -s*z - ds_aff*dz_aff + sigma*mu.
+    for (std::size_t l = 0; l < pl; ++l) {
+        rhs[dl_off + l] += sigma * mu - dsl_[l] * dlambdal_[l];
     }
-    for (std::size_t i = 0; i < ncons; ++i) {
-        rhs[nvars + i] = 0.0;
+    for (std::size_t u = 0; u < pu; ++u) {
+        rhs[du_off + u] += sigma * mu - dsu_[u] * dlambdau_[u];
     }
-    for (std::size_t j = 0; j < nvars; ++j) {
-        rhs[nvars + ncons + j] = sigma * mu - x_[j] * z_[j];
+    for (std::size_t g = 0; g < pg; ++g) {
+        rhs[dgdual_off + g] += sigma * mu - dg_[g] * dlambdag_[g];
     }
 
-    std::vector<double> sol(total, 0.0);
-    solve_kkt_system(problem, rhs, sol);
-
-    dx_.assign(nvars, 0.0);
-    dy_.assign(ncons, 0.0);
-    dz_.assign(nvars, 0.0);
-    ds_.assign(nvars, 0.0);
-
-    for (std::size_t j = 0; j < nvars; ++j) dx_[j] = sol[j];
-    for (std::size_t i = 0; i < ncons; ++i) dy_[i] = sol[nvars + i];
-    for (std::size_t j = 0; j < nvars; ++j) dz_[j] = sol[nvars + ncons + j];
-    for (std::size_t j = 0; j < nvars; ++j) ds_[j] = (-x_[j] * dz_[j] - x_[j] * z_[j] + sigma * mu) / z_[j];
-}
-
-void InteriorPointQPSolver::update_variables(double alpha_p, double alpha_d) {
-    for (std::size_t j = 0; j < x_.size(); ++j) {
-        x_[j] += alpha_p * dx_[j];
-        s_[j] += alpha_p * ds_[j];
-        z_[j] += alpha_d * dz_[j];
-    }
-    for (std::size_t i = 0; i < y_.size(); ++i) {
-        y_[i] += alpha_d * dy_[i];
+    std::vector<double> sol = rhs;
+    if (kkt_factorization_) {
+        kkt_factorization_->solve(sol);
+        sweep_total_ += static_cast<std::size_t>(std::max(
+            0, numerical::iterative_refinement(*kkt_factorization_, kkt_mat_, sol, rhs, 1e-10, 5)));
+        unpack_directions(sol);
+    } else {
+        kkt_step_ok_ = false;
     }
 }
 
-bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, double mu) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
-
-    double primal_residual = 0.0, dual_residual = 0.0;
-    const auto& A = problem.constraint_matrix;
-
-    for (std::size_t i = 0; i < ncons; ++i) {
-        double primal_sum = 0.0;
-        if (A.order() == model::StorageOrder::CSR) {
-            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-                std::size_t j = A.col_indices()[k];
-                primal_sum += A.values()[k] * x_[j];
-            }
-        }
-        double rhs = problem.constraints[i].rhs;
-        if (problem.constraints[i].sense == model::ConstraintSense::LE) {
-            primal_residual = std::max(primal_residual, std::abs(rhs - primal_sum));
-        } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
-            primal_residual = std::max(primal_residual, std::abs(primal_sum - rhs));
-        } else {
-            primal_residual = std::max(primal_residual, std::abs(rhs - primal_sum));
-        }
-    }
-
-    for (std::size_t j = 0; j < nvars; ++j) {
-        double dual_sum = 0.0;
-        if (A.order() == model::StorageOrder::CSR) {
-            for (std::size_t k = 0; k < A.nnz(); ++k) {
-                if (A.col_indices()[k] == j) {
-                    std::size_t i = 0;
-                    while (i < A.rows() && A.row_ptr()[i + 1] <= k) ++i;
-                    if (i < A.rows()) dual_sum += A.values()[k] * y_[i];
-                }
-            }
-        }
-
-        double h_x = 0.0;
-        for (const auto& term : problem.quadratic_terms) {
-            if (term.row == j) h_x += term.coeff * x_[term.col];
-            if (term.col == j && term.row != term.col) h_x += term.coeff * x_[term.row];
-        }
-
-        double target = problem.variables[j].objective_coeff;
-        dual_residual = std::max(dual_residual, std::abs(target + h_x - dual_sum - z_[j]));
-    }
-
-    return primal_residual < options_.convergence_tol &&
-           dual_residual < options_.convergence_tol &&
-           mu < options_.complementarity_tol;
-}
-
-double InteriorPointQPSolver::compute_alpha(const std::vector<double>& vars, const std::vector<double>& dirs) {
+double InteriorPointQPSolver::compute_alpha_pair(const std::vector<double>& vals, const std::vector<double>& dirs) const {
     double alpha = 1.0;
-    for (std::size_t i = 0; i < vars.size(); ++i) {
-        if (dirs[i] < 0) {
-            alpha = std::min(alpha, -vars[i] / dirs[i]);
+    for (std::size_t i = 0; i < vals.size(); ++i) {
+        if (dirs[i] < 0.0) {
+            double ratio = (vals[i] > 0.0) ? -vals[i] / dirs[i] : 0.0;
+            alpha = std::min(alpha, ratio);
         }
     }
     return alpha;
 }
 
-void InteriorPointQPSolver::form_kkt_system(const model::Problem& problem, std::vector<double>& rhs) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
+double InteriorPointQPSolver::compute_alpha_primal() const {
+    double alpha = 1.0;
+    alpha = std::min(alpha, compute_alpha_pair(sl_, dsl_));
+    alpha = std::min(alpha, compute_alpha_pair(su_, dsu_));
+    alpha = std::min(alpha, compute_alpha_pair(g_, dg_));
+    return alpha;
+}
 
-    rhs.resize(nvars + ncons + nvars, 0.0);
+double InteriorPointQPSolver::compute_alpha_dual() const {
+    double alpha = 1.0;
+    alpha = std::min(alpha, compute_alpha_pair(lambdal_, dlambdal_));
+    alpha = std::min(alpha, compute_alpha_pair(lambdau_, dlambdau_));
+    alpha = std::min(alpha, compute_alpha_pair(lambdag_, dlambdag_));
+    return alpha;
+}
 
-    for (std::size_t j = 0; j < nvars; ++j) {
-        double h_x = 0.0;
-        for (const auto& term : problem.quadratic_terms) {
-            if (term.row == j) h_x += term.coeff * x_[term.col];
-            if (term.col == j && term.row != term.col) h_x += term.coeff * x_[term.row];
-        }
-        rhs[j] = -(problem.variables[j].objective_coeff + h_x + z_[j]);
+void InteriorPointQPSolver::update_variables(double alpha_p, double alpha_d) {
+    for (std::size_t j = 0; j < x_.size(); ++j) {
+        x_[j] += alpha_p * dx_[j];
     }
-
-    const auto& A = problem.constraint_matrix;
-    for (std::size_t i = 0; i < ncons; ++i) {
-        double sum = 0.0;
-        for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-            sum += A.values()[k] * x_[A.col_indices()[k]];
-        }
-        double target = problem.constraints[i].rhs;
-        if (problem.constraints[i].sense == model::ConstraintSense::LE) {
-            rhs[nvars + i] = -(target - sum);
-        } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
-            rhs[nvars + i] = -(sum - target);
-        } else {
-            rhs[nvars + i] = -(target - sum);
-        }
+    for (std::size_t l = 0; l < sl_.size(); ++l) {
+        sl_[l] += alpha_p * dsl_[l];
     }
-
-    for (std::size_t j = 0; j < nvars; ++j) {
-        rhs[nvars + ncons + j] = -x_[j] * z_[j];
+    for (std::size_t u = 0; u < su_.size(); ++u) {
+        su_[u] += alpha_p * dsu_[u];
+    }
+    for (std::size_t g = 0; g < g_.size(); ++g) {
+        g_[g] += alpha_p * dg_[g];
+    }
+    for (std::size_t i = 0; i < y_.size(); ++i) {
+        y_[i] += alpha_d * dy_[i];
+    }
+    for (std::size_t l = 0; l < lambdal_.size(); ++l) {
+        lambdal_[l] += alpha_d * dlambdal_[l];
+    }
+    for (std::size_t u = 0; u < lambdau_.size(); ++u) {
+        lambdau_[u] += alpha_d * dlambdau_[u];
+    }
+    for (std::size_t g = 0; g < lambdag_.size(); ++g) {
+        lambdag_[g] += alpha_d * dlambdag_[g];
     }
 }
 
-void InteriorPointQPSolver::solve_kkt_system(const model::Problem& problem,
-                                              const std::vector<double>& rhs,
-                                              std::vector<double>& sol) {
-    std::size_t nvars = problem.variables.size();
-    std::size_t ncons = problem.constraints.size();
-    std::size_t total = nvars + ncons + nvars;
-
+bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, double mu) {
+    const std::size_t n = nvars_;
+    const std::size_t nc = ncons_;
     const auto& A = problem.constraint_matrix;
 
-    std::vector<numerical::Triplet> triplets;
-    triplets.reserve(nvars + 2 * problem.quadratic_terms.size() + 2 * A.nnz() + 3 * nvars);
+    double primal_res = 0.0;
+    double dual_res = 0.0;
 
-    std::vector<double> h_diag(nvars, options_.regularization);
+    for (std::size_t i = 0; i < nc; ++i) {
+        double sum = 0.0;
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            sum += A.values()[t] * x_[A.col_indices()[t]];
+        }
+        if (ineq_idx_of_[i] != NPOS) {
+            std::size_t k = ineq_idx_of_[i];
+            sum += static_cast<double>(ineq_sigma_[k]) * g_[k];
+        }
+        primal_res = std::max(primal_res, std::abs(sum - problem.constraints[i].rhs));
+    }
+    for (std::size_t l = 0; l < n_lb_; ++l) {
+        primal_res = std::max(primal_res,
+                              std::abs(x_[lb_var_[l]] - lb_val_[l] - sl_[l]));
+    }
+    for (std::size_t u = 0; u < n_ub_; ++u) {
+        primal_res = std::max(primal_res,
+                              std::abs(ub_val_[u] - x_[ub_var_[u]] - su_[u]));
+    }
+
+    std::vector<double> grad(n, 0.0);
+    for (std::size_t j = 0; j < n; ++j) {
+        grad[j] = problem.variables[j].objective_coeff;
+    }
     for (const auto& term : problem.quadratic_terms) {
-        if (term.row == term.col) {
-            h_diag[term.row] += term.coeff;
-        } else {
-            triplets.emplace_back(term.row, term.col, term.coeff);
-            triplets.emplace_back(term.col, term.row, term.coeff);
+        grad[term.row] += term.coeff * x_[term.col];
+        if (term.col != term.row) grad[term.col] += term.coeff * x_[term.row];
+    }
+    for (std::size_t i = 0; i < nc; ++i) {
+        double yi = y_[i];
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            grad[A.col_indices()[t]] += A.values()[t] * yi;
         }
     }
-    for (std::size_t j = 0; j < nvars; ++j) {
-        triplets.emplace_back(j, j, h_diag[j]);
+    for (std::size_t j = 0; j < n; ++j) {
+        if (lb_idx_of_[j] != NPOS) grad[j] -= lambdal_[lb_idx_of_[j]];
+        if (ub_idx_of_[j] != NPOS) grad[j] += lambdau_[ub_idx_of_[j]];
+        dual_res = std::max(dual_res, std::abs(grad[j]));
+    }
+    for (std::size_t k = 0; k < n_ineq_; ++k) {
+        std::size_t i = ineq_row_[k];
+        dual_res = std::max(dual_res,
+                            std::abs(static_cast<double>(ineq_sigma_[k]) * y_[i] - lambdag_[k]));
     }
 
-    for (std::size_t i = 0; i < ncons; ++i) {
-        for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-            std::size_t j = A.col_indices()[k];
-            triplets.emplace_back(nvars + i, j, A.values()[k]);
-            triplets.emplace_back(j, nvars + i, A.values()[k]);
-        }
-    }
-
-    for (std::size_t j = 0; j < nvars; ++j) {
-        triplets.emplace_back(j, nvars + ncons + j, 1.0);
-        triplets.emplace_back(nvars + ncons + j, j, z_[j]);
-        triplets.emplace_back(nvars + ncons + j, nvars + ncons + j, x_[j]);
-    }
-
-    numerical::SparseMatrix kkt_mat = numerical::SparseMatrix::from_triplets(total, total, triplets);
-    kkt_factorization_ = numerical::create_factorization(numerical::FactorizationType::LU, kkt_mat, tol_);
-    sol = rhs;
-    kkt_factorization_->solve(sol);
-    numerical::iterative_refinement(*kkt_factorization_, kkt_mat, sol, rhs);
+    return primal_res < options_.convergence_tol &&
+           dual_res < options_.convergence_tol &&
+           mu < options_.complementarity_tol;
 }
 
 } // namespace hypernova::qp

@@ -736,11 +736,14 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
         result.primal = primal;
         result.dual.assign(problem.constraints.size(), 0.0);
 
+        bool is_feasible_incumbent = (max_abs(rp) <= tol_.feasibility_tol());
+
         result.status = numerical_error ? model::ProblemStatus::NUMERICAL_ERROR
                                         : (interrupted ? model::ProblemStatus::INTERRUPTED
                                                        : (done ? model::ProblemStatus::OPTIMAL
-                                                               : (time_up ? model::ProblemStatus::TIME_LIMIT
-                                                                          : model::ProblemStatus::ITER_LIMIT)));
+                                                               : (is_feasible_incumbent ? model::ProblemStatus::SUBOPTIMAL
+                                                                                        : (time_up ? model::ProblemStatus::TIME_LIMIT
+                                                                                                   : model::ProblemStatus::ITER_LIMIT))));
 
         if (std::getenv("HYPERNOVA_IPM_DBG")) {
             std::cerr << "IPM exit done=" << done << " time_up=" << time_up

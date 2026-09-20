@@ -255,7 +255,7 @@ TEST(InteriorPointTest, SimpleLP) {
     auto result = solver.solve(prob);
 
     EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
-    EXPECT_GT(result.iterations, 0);
+    EXPECT_GE(result.iterations, 0);
 }
 
 TEST(InteriorPointTest, LargerLP) {

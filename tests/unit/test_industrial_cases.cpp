@@ -48,7 +48,7 @@ TEST(IndustrialCasesTest, CrudeBlendingQP) {
     Solver solver(opts);
     Solution sol = solver.solve(problem);
 
-    EXPECT_TRUE(sol.is_feasible() || sol.is_optimal() || sol.status == model::ProblemStatus::ITER_LIMIT);
+    EXPECT_TRUE(sol.is_optimal());
 }
 
 
@@ -82,7 +82,7 @@ TEST(IndustrialCasesTest, ProductionPlanningMILP) {
     EXPECT_NEAR(sol.primal[m_die] + sol.primal[m_atf], 1.0, 1e-4);
 }
 
-TEST(IndustrialCasesTest, TMP_LogisticsDebug) {
+TEST(IndustrialCasesTest, LogisticsFreightMILP) {
     model::ProblemBuilder builder("mrpl_logistics_freight_milp");
     std::size_t x_pipe_hsn = builder.add_variable(0.0, 300.0, model::VarType::CONTINUOUS, "Vol_Pipe_Hassan");
     std::size_t z_pipe_hsn = builder.add_variable(0.0,   1.0, model::VarType::BINARY,     "Trigger_Pipe_Hassan");
@@ -118,23 +118,17 @@ TEST(IndustrialCasesTest, TMP_LogisticsDebug) {
         opts.presolve = presolve_on ? PresolveLevel::AGGRESSIVE : PresolveLevel::OFF;
         Solver solver(opts);
         Solution sol = solver.solve(problem);
-        validation::SolutionVerifier verifier;
-        model::Solution ms;
-        ms.primal = sol.primal; ms.dual = sol.dual; ms.reduced_costs = sol.reduced_costs;
-        ms.status = sol.status;
-        validation::VerificationResult vr = verifier.verify_detailed(problem, ms);
-        std::cerr << "\n[TMP presolve=" << presolve_on << "] status=" << static_cast<int>(sol.status)
-                  << " obj=" << sol.objective_value << " primal_inf=" << vr.primal_infeasibility
-                  << " integrality=" << vr.integrality_violation << " feasible=" << vr.feasible << "\n";
-        std::cerr << "[TMP] primal:"; for (double v : sol.primal) std::cerr << " " << v; std::cerr << "\n";
-        std::cerr << "[TMP] violated:"; for (std::size_t i : vr.violated_constraints) std::cerr << " " << i; std::cerr << "\n";
-        std::cerr << "[TMP] msg: " << vr.message << "\n";
-        const auto& A = problem.constraint_matrix;
-        for (std::size_t i = 0; i < problem.constraints.size(); ++i) {
-            double act = 0.0;
-            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i+1]; ++k) act += A.values()[k] * sol.primal[A.col_indices()[k]];
-            std::cerr << "[TMP] row " << i << " act=" << act << " rhs=" << problem.constraints[i].rhs << " sense=" << static_cast<int>(problem.constraints[i].sense) << "\n";
-        }
+        
+        EXPECT_TRUE(sol.is_optimal());
+        EXPECT_NEAR(sol.objective_value, 7690.0, 1e-4);
+        EXPECT_NEAR(sol.primal[x_pipe_hsn], 120.0, 1e-4);
+        EXPECT_NEAR(sol.primal[z_pipe_hsn], 1.0, 1e-4);
+        EXPECT_NEAR(sol.primal[x_pipe_blr], 250.0, 1e-4);
+        EXPECT_NEAR(sol.primal[z_pipe_blr], 1.0, 1e-4);
+        EXPECT_NEAR(sol.primal[x_ship_goa], 90.0, 1e-4);
+        EXPECT_NEAR(sol.primal[x_ship_koc], 140.0, 1e-4);
+        EXPECT_NEAR(sol.primal[x_rail_hyd], 100.0, 1e-4);
+        EXPECT_NEAR(sol.primal[z_rail_hyd], 1.0, 1e-4);
     }
 }
 

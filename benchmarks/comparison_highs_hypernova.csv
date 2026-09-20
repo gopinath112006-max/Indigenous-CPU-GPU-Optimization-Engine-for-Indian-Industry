@@ -1,9 +1,7 @@
-Instance,Vars,Cons,HiGHS_Time_s,HiGHS_Status,HyperNova_Time_s,HyperNova_Status
-cogen_power_milp,20,25,0.015,Optimal,0.012,Optimal
-hydrogen_network_lp,100,150,0.045,Optimal,0.038,Optimal
-logistics_freight_milp,500,600,0.21,Optimal,0.185,Optimal
-refinery_production_planning_milp,2000,2500,1.15,Optimal,1.05,Optimal
-netlib_25fv47,1571,821,0.08,Optimal,0.095,Optimal
-netlib_dfl001,12230,6071,1.2,Optimal,4.5,Optimal
-scale_100k,100000,50000,0.45,Optimal,0.65,Optimal
-scale_1M,1000000,500000,5.2,Optimal,7.5,Optimal
+Instance,Vars,Cons,Class,HyperNova_Time_s,HyperNova_Status,HyperNova_Objective,HiGHS_Time_s,HiGHS_Status,HiGHS_Objective,Verified
+cogen_power_milp,7,8,MILP,1.215000,OPTIMAL,5420.0,0.060000,Optimal,5420.0,yes
+hydrogen_network_lp,5,4,LP,0.327000,OPTIMAL,69.96000000000001,0.001000,Optimal,69.96000000000001,yes
+logistics_freight_milp,8,11,MILP,0.168000,OPTIMAL,7690.0,0.001000,Optimal,7690.0,yes
+refinery_production_planning_milp,15,18,MILP,0.169000,OPTIMAL,2137300.0,0.001000,Optimal,2137300.0,yes
+crude_blending_qp,5,4,QP,0.556000,OPTIMAL,22692.1186264308,0.000000,HighsModelStatus.kModelEmpty,0.0,yes
+netlib_25fv47,1571,821,LP,119.974000,ITER_LIMIT,n/a,0.222000,Optimal,5501.845888286757,no

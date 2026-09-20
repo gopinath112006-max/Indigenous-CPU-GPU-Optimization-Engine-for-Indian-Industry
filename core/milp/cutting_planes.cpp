@@ -349,75 +349,92 @@ std::vector<Cut> CutGenerator::generate_flow_covers(const model::Problem& proble
         const bool negate = (con.sense == model::ConstraintSense::LE);
         double b = negate ? -con.rhs : con.rhs;
 
-        std::vector<std::pair<std::size_t, double>> vars;
-        bool ok = true;
+        struct Item {
+            std::size_t j;
+            double a;
+            bool is_binary;
+            bool is_comp;
+        };
+        std::vector<Item> vars;
+        
         if (A.order() == model::StorageOrder::CSR) {
             for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
                 std::size_t j = A.col_indices()[k];
                 double a = negate ? -A.values()[k] : A.values()[k];
-                if (problem.variables[j].type != model::VarType::BINARY) { ok = false; break; }
-                if (a > tol_.zero_tol()) {
-                    vars.push_back({j, a});
-                } else if (a < -tol_.zero_tol()) {
-                    ok = false;  // mixed-sign rows are not flow rows
-                    break;
+                if (std::abs(a) <= tol_.zero_tol()) continue;
+
+                bool is_bin = (problem.variables[j].type == model::VarType::BINARY);
+                if (is_bin) {
+                    if (a > 0.0) {
+                        vars.push_back({j, a, true, false});
+                    } else {
+                        // Complement x_j = 1 - x_j' => a_j (1 - x_j') = a_j - a_j x_j'
+                        // New coefficient is -a_j > 0.
+                        b -= a;
+                        vars.push_back({j, -a, true, true});
+                    }
+                } else {
+                    if (a > 0.0) {
+                        vars.push_back({j, a, false, false});
+                    }
+                    // If a < 0 for a continuous/integer variable, dropping it relaxes the >= constraint,
+                    // so we just ignore it.
                 }
             }
         }
-        if (!ok || vars.size() < 2 || b <= tol_.feasibility_tol()) continue;
+        
+        // We need at least some binary variables to form a cover.
+        // Let's only consider binary variables for the cover itself.
+        std::vector<Item> cover_eligible;
+        double total_eligible = 0.0;
+        for (const auto& item : vars) {
+            if (item.is_binary) {
+                cover_eligible.push_back(item);
+                total_eligible += item.a;
+            }
+        }
+        
+        if (cover_eligible.size() < 2 || b <= tol_.feasibility_tol() || total_eligible <= b + tol_.feasibility_tol()) continue;
 
-        double total = 0.0;
-        for (const auto& [j, a] : vars) total += a;
-        if (total <= b + tol_.feasibility_tol()) continue;
+        std::sort(cover_eligible.begin(), cover_eligible.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.a > rhs.a; });
 
-        std::sort(vars.begin(), vars.end(),
-            [](const auto& lhs, const auto& rhs) { return lhs.second > rhs.second; });
-
-        // Two heuristic, both-minimal cover constructions: largest-first (few
-        // heavy items) and smallest-first (many light items, which produces the
-        // structurally strong "bundle" covers). Each greedy cover is minimally
-        // reduced below.
-        std::vector<std::vector<std::size_t>> cover_candidates;
+        std::vector<std::vector<Item>> cover_candidates;
         {
-            std::vector<std::size_t> cover;
+            std::vector<Item> cover;
             double sum = 0.0;
-            for (const auto& [j, a] : vars) {
-                cover.push_back(j);
-                sum += a;
+            for (const auto& item : cover_eligible) {
+                cover.push_back(item);
+                sum += item.a;
                 if (sum >= b - tol_.feasibility_tol()) break;
             }
             cover_candidates.push_back(cover);
         }
         {
-            std::vector<std::size_t> cover;
+            std::vector<Item> cover;
             double sum = 0.0;
-            for (auto it = vars.rbegin(); it != vars.rend(); ++it) {
-                cover.push_back(it->first);
-                sum += it->second;
+            for (auto it = cover_eligible.rbegin(); it != cover_eligible.rend(); ++it) {
+                cover.push_back(*it);
+                sum += it->a;
                 if (sum >= b - tol_.feasibility_tol()) break;
             }
             cover_candidates.push_back(cover);
         }
 
+        // Minimalize covers and generate cuts
         std::set<std::vector<std::size_t>> seen_covers;
-        for (auto cover : cover_candidates) {
-            std::sort(cover.begin(), cover.end());
-            if (!seen_covers.insert(cover).second) continue;
+        for (auto& cover : cover_candidates) {
+            std::vector<std::size_t> sig;
+            for (const auto& item : cover) sig.push_back(item.j);
+            std::sort(sig.begin(), sig.end());
+            if (!seen_covers.insert(sig).second) continue;
 
-            // Minimalize: drop redundant cover elements (removing any one must
-            // leave a non-cover).
             double sum = 0.0;
-            for (auto j : cover) {
-                auto a_it = std::find_if(vars.begin(), vars.end(),
-                    [j](const auto& v) { return v.first == j; });
-                sum += a_it->second;
-            }
+            for (const auto& item : cover) sum += item.a;
+            
             for (auto it = cover.begin(); it != cover.end(); ) {
-                auto j = *it;
-                auto a_it = std::find_if(vars.begin(), vars.end(),
-                    [j](const auto& v) { return v.first == j; });
-                if (a_it != vars.end() && sum - a_it->second >= b - tol_.feasibility_tol()) {
-                    sum -= a_it->second;
+                if (sum - it->a >= b - tol_.feasibility_tol()) {
+                    sum -= it->a;
                     it = cover.erase(it);
                 } else {
                     ++it;
@@ -430,24 +447,44 @@ std::vector<Cut> CutGenerator::generate_flow_covers(const model::Problem& proble
             if (lambda <= tol_.feasibility_tol()) continue;
 
             Cut cut;
-            for (const auto& [j, a] : vars) {
-                double c = 1.0;
-                if (std::find(cover.begin(), cover.end(), j) == cover.end()) {
-                    c = a / lambda;
+            double cut_rhs = static_cast<double>(cover.size()) - 1.0;
+            
+            // Build the cut using the generalized mixed-integer flow cover formula
+            for (const auto& item : vars) {
+                bool in_cover = false;
+                for (const auto& c_item : cover) {
+                    if (c_item.j == item.j) { in_cover = true; break; }
                 }
-                if (c > tol_.zero_tol()) {
-                    cut.coefficients.push_back({j, c});
+                
+                double coef = 0.0;
+                if (in_cover) {
+                    coef = 1.0;
+                } else {
+                    coef = item.a / lambda;
+                }
+                
+                // Map back to original variables
+                if (item.is_comp) {
+                    // It was complemented: original a_j < 0, item.a = -a_j
+                    // We added coef * x_j' = coef * (1 - x_j) = coef - coef * x_j
+                    cut_rhs -= coef;
+                    coef = -coef;
+                }
+                
+                if (std::abs(coef) > tol_.zero_tol()) {
+                    cut.coefficients.push_back({item.j, coef});
                 }
             }
+
             cut.sense = model::ConstraintSense::GE;
-            cut.rhs = static_cast<double>(cover.size()) - 1.0;
+            cut.rhs = cut_rhs;
             cut.name = "flow_cover_" + std::to_string(next_cut_id_++);
 
             double activity = 0.0;
             for (const auto& [j, c] : cut.coefficients) {
                 activity += c * lp_solution[j];
             }
-            cut.efficacy = std::max(0.0, cut.rhs - activity);
+            cut.efficacy = std::max(0.0, activity - cut.rhs);
 
             cuts.push_back(cut);
         }
@@ -455,7 +492,6 @@ std::vector<Cut> CutGenerator::generate_flow_covers(const model::Problem& proble
 
     return cuts;
 }
-
 void CutGenerator::remove_old_cuts(int max_age) {
     cuts_.erase(
         std::remove_if(cuts_.begin(), cuts_.end(),

@@ -2,6 +2,7 @@
 build/
 build-debug/
 build-*/
+build2/
 out/
 
 # Compiled artifacts
@@ -37,9 +38,19 @@ sweep_*.csv
 sweep_*.json
 b1.csv
 b1.json
+benchmarks/results/
+benchmarks/scaling/
+
+# Build log artifacts at repo root
+build-*.log
 
 # Scratch / local tool artifacts
 .freebuff/
+scratch/
+qp_debug*.log
+output.log
+scale_bench.log
+New folder/
 
 # Python
 __pycache__/

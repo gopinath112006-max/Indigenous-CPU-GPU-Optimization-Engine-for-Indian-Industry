@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 add_library(hypernova_qp
     active_set.cpp
     interior_point_qp.cpp
+    qp_common.cpp
 )
 
 target_include_directories(hypernova_qp PUBLIC
@@ -22,4 +23,4 @@ install(TARGETS hypernova_qp
     RUNTIME DESTINATION bin
     INCLUDES DESTINATION include
 )
-install(FILES active_set.hpp interior_point_qp.hpp DESTINATION include/hypernova/qp)
+install(FILES active_set.hpp interior_point_qp.hpp qp_common.hpp DESTINATION include/hypernova/qp)

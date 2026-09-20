@@ -41,6 +41,9 @@ struct SolveReport {
     double complementarity = 0.0;
     double integrality_violation = 0.0;
 
+    bool is_feasible = false;
+    bool optimality_proven = false;
+
     std::string engine_used;
     bool gpu_used = false;
     int threads_used = 1;

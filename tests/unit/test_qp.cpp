@@ -63,6 +63,34 @@ TEST(ActiveSetQPTest, QPWithEquality) {
     EXPECT_TRUE(result.status == ProblemStatus::OPTIMAL || result.status == ProblemStatus::ITER_LIMIT);
 }
 
+TEST(ActiveSetQPTest, ContradictoryBounds) {
+    ProblemBuilder builder("test");
+    builder.add_variable(5.0, 3.0, VarType::CONTINUOUS, "x1"); // lb > ub
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+
+    Problem prob = builder.build();
+
+    ActiveSetQPSolver solver;
+    auto result = solver.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::INFEASIBLE);
+}
+
+TEST(InteriorPointQPTest, ContradictoryBounds) {
+    ProblemBuilder builder("test");
+    builder.add_variable(5.0, 3.0, VarType::CONTINUOUS, "x1"); // lb > ub
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::INFEASIBLE);
+}
+
 TEST(InteriorPointQPTest, SimpleQP) {
     ProblemBuilder builder("test");
     builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
@@ -138,10 +166,13 @@ TEST(MIQPTest, BranchAndBoundInteriorPointRelaxation) {
                 result.status == ProblemStatus::TIME_LIMIT ||
                 result.status == ProblemStatus::NUMERICAL_ERROR ||
                 result.status == ProblemStatus::SUBOPTIMAL);
-    if (result.status == ProblemStatus::OPTIMAL) {
+if (result.status == ProblemStatus::OPTIMAL) {
         EXPECT_NEAR(result.objective_value, -2.0, 0.5);
         EXPECT_NEAR(result.primal[0], 2.0, 0.1);
-        EXPECT_TRUE(result.primal[1] == 0.0 || result.primal[1] == 1.0);
+        // The IPM converges to a bound within tolerance rather than exactly
+        // onto it, so accept values within integrality tolerance of 0 or 1.
+        EXPECT_TRUE(std::abs(result.primal[1]) < 1e-4 ||
+                    std::abs(result.primal[1] - 1.0) < 1e-4);
         EXPECT_GE(result.nodes_explored, 1u);
     }
 }
@@ -674,4 +705,257 @@ TEST(MIQPTest, NodeLimitedMIQP) {
                 result.status == ProblemStatus::OPTIMAL ||
                 result.status == ProblemStatus::UNKNOWN);
     EXPECT_LE(result.nodes_explored, 1u);
+}
+TEST(QPNodeRelaxationTest, ComprehensiveCoverage) {
+    auto test_bounds = [](double lb, double ub, ProblemStatus expected_status, double expected_val_x1 = 0.0) {
+        ProblemBuilder builder("test");
+        builder.add_variable(lb, ub, VarType::CONTINUOUS, "x1"); 
+        builder.set_objective({{0, 1.0}}, ObjectiveSense::MINIMIZE); 
+        builder.add_quadratic_term(0, 0, 2.0); 
+
+        Problem prob = builder.build();
+        ActiveSetQPSolver solver;
+        auto result = solver.solve(prob);
+        EXPECT_EQ(result.status, expected_status);
+        if (expected_status == ProblemStatus::OPTIMAL) {
+            EXPECT_NEAR(result.primal[0], expected_val_x1, 1e-5);
+        }
+    };
+
+test_bounds(-10.0, 10.0, ProblemStatus::OPTIMAL, -0.5);
+    test_bounds(0.0, 10.0, ProblemStatus::OPTIMAL, 0.0);
+    test_bounds(1.0, 10.0, ProblemStatus::OPTIMAL, 1.0);
+    test_bounds(-10.0, -2.0, ProblemStatus::OPTIMAL, -2.0);
+    test_bounds(3.0, 3.0, ProblemStatus::OPTIMAL, 3.0);
+    test_bounds(1.0, 1.0, ProblemStatus::OPTIMAL, 1.0);
+    test_bounds(2.0, 1.0, ProblemStatus::INFEASIBLE);
+}
+
+TEST(InteriorPointBoundTest, UpperBoundActive) {
+    // min 0.5*x1^2 - 0.5*x1, x1 in [0, 0.3]
+    // Unconstrained x1=0.5 clamped at ub=0.3; obj = 0.045 - 0.15 = -0.105.
+    ProblemBuilder builder("ipm_ub");
+    builder.add_variable(0.0, 0.3, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -0.5}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 0.3, 1e-4);
+    EXPECT_NEAR(result.objective_value, -0.105, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, LowerBoundActive) {
+    // min 0.5*x1^2 + x1, x1 in [1, 5]
+    // Unconstrained x1=-1 clamped at lb=1; obj = 0.5 + 1 = 1.5.
+    ProblemBuilder builder("ipm_lb");
+    builder.add_variable(1.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 1.5, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, FixedVariable) {
+    // min x0^2 + x1^2 - 4*x0 - 2*x1, x0 fixed at 2 (lb==ub), x1 in [0, 10].
+    // Substituting x0=2: obj = x1^2 - 2*x1 - 4 -> min at x1=1, obj = -5.
+    ProblemBuilder builder("ipm_fixed");
+    builder.add_variable(2.0, 2.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, -2.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 1.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -5.0, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, MixedBoundsWithInequality) {
+    // min x0^2 + x1^2 - 3*x0 - x1, x0 in [-2, 5], x1 in [-100, 2], x0 + x1 <= 3.
+    // Unconstrained x0=1.5, x1=0.5, activity=2.0 -> constraint and bounds inactive.
+    // obj = 2.25 - 4.5 + 0.25 - 0.5 = -2.5.
+    ProblemBuilder builder("ipm_mixed");
+    builder.add_variable(-2.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(-100.0, 2.0, VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::LE, 3.0, "c1");
+    builder.set_objective({{0, -3.0}, {1, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 1.5, 1e-4);
+    EXPECT_NEAR(result.primal[1], 0.5, 1e-4);
+    EXPECT_NEAR(result.objective_value, -2.5, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, InequalityConstraintActive) {
+    // min x1^2 + x1*x2 + 0.5*x2^2 - 3*x1 - 2*x2, x1 + x2 >= 4.
+    // KKT (GE active): x1=1, x2=3, lambda=-2 (correct sign for GE), obj=-0.5.
+    ProblemBuilder builder("ipm_ineq");
+    builder.add_variable(0.0, 100.0, VarType::CONTINUOUS, "x1");
+    builder.add_variable(0.0, 100.0, VarType::CONTINUOUS, "x2");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::GE, 4.0, "c1");
+    builder.set_objective({{0, -3.0}, {1, -2.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(0, 1, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 3.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -0.5, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, MaximizeWithBoundActive) {
+    // max -(x0^2) + 2*x0, x0 in [0, 0.4] (concave, negated to a convex min).
+    // Negated min: x0^2 - 2*x0, unconstrained x0=1 clamped at ub=0.4.
+    // Value = -(0.16) + 0.8 = 0.64.
+    ProblemBuilder builder("ipm_max");
+    builder.add_variable(0.0, 0.4, VarType::CONTINUOUS, "x0");
+    builder.set_objective({{0, 2.0}}, ObjectiveSense::MAXIMIZE);
+    builder.add_quadratic_term(0, 0, -2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 0.4, 1e-4);
+    EXPECT_NEAR(result.objective_value, 0.64, 1e-4);
+}
+
+TEST(InteriorPointBoundTest, AgreesWithActiveSetOnBoundedCrossTerm) {
+    // Gate check: both solvers must agree on the previously failing bounded
+    // cross-term QP (min x1^2 + x1*x2 + 0.5*x2^2, x in [0,10], optimum (1,1)).
+    Problem prob = buildCrossTermQP();
+
+    auto as = ActiveSetQPSolver().solve(prob);
+    ASSERT_EQ(as.status, ProblemStatus::OPTIMAL);
+
+    auto ipm = InteriorPointQPSolver().solve(prob);
+    ASSERT_EQ(ipm.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm.primal[0], as.primal[0], 1e-4);
+    EXPECT_NEAR(ipm.primal[1], as.primal[1], 1e-4);
+    EXPECT_NEAR(ipm.objective_value, as.objective_value, 1e-4);
+}
+
+TEST(P6ConvexityTest, IndefiniteCrossTermRejected) {
+    // min x0 * x1   (Q = [[0, 1], [1, 0]] indefinite: eigenvalues +1, -1).
+    // The cross term is stored once and mirrored; the classifier must detect
+    // the negative eigenvalue instead of classifying the QP as convex.
+    ProblemBuilder builder("ipm_indef");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::NONCONVEX);
+
+    ActiveSetQPSolver as;
+    auto as_r = as.solve(prob);
+    EXPECT_EQ(as_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(as_r.convexity, ConvexityClassification::NONCONVEX);
+}
+
+TEST(P6ConvexityTest, StrictlyConvexClassified) {
+    // min x0^2 + x1^2 - 4*x0 - 2*x1 (PD Hessian) -> CONVEX.
+    ProblemBuilder builder("ipm_pd");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, -2.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    ASSERT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::CONVEX);
+    EXPECT_NEAR(ipm_r.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 1.0, 1e-4);
+
+    ActiveSetQPSolver as;
+    auto as_r = as.solve(prob);
+    ASSERT_EQ(as_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_EQ(as_r.convexity, ConvexityClassification::CONVEX);
+}
+
+TEST(P6ConvexityTest, RankDeficientPSDClassifiedUncertain) {
+    // min (x0 + x1 - 2)^2 - 4 = 0.5*(2x0^2 + 4x0x1 + 2x1^2) - 4x0 - 4x1.
+    // Q = [[2,2],[2,2]] is PSD rank-1 -> numerically uncertain, not nonconvex.
+    ProblemBuilder builder("ipm_psd");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, -4.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(0, 1, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    ASSERT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::NUMERICALLY_UNCERTAIN);
+    EXPECT_NEAR(ipm_r.objective_value, -4.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[0] + ipm_r.primal[1], 2.0, 1e-4);
+}
+
+TEST(P6ConventionTest, OffDiagonalNotDoubleCounted) {
+    // min x1^2 + x1*x2 + 0.5*x2^2 - 3*x1 - 2*x2, x in [0,10].
+    // Convention: objective = 1/2 x^T Q x + c^T x with Q_12 = stored 1.0 and
+    // Q_11 = 2.0, Q_22 = 1.0, i.e. Hessian H = [[2,1],[1,1]].  The optimum is
+    // x=(1,1) with a zero gradient.  If the cross term were doubled into the
+    // Hessian the optimum would NOT be (1,1), so the passed gradient check
+    // proves the symmetric-Q convention (no double counting).
+    Problem prob = buildCrossTermQP();
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    ASSERT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    verify_gradient_zero(prob, ipm_r.primal, 1e-6);
+    EXPECT_NEAR(ipm_r.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.objective_value, -2.5, 1e-4);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::CONVEX);
+}
+
+TEST(P6NumericTest, IllConditionedSolvesWithRegularization) {
+    // min 0.5*(1e6*x0^2 + 1e-2*x1^2) - 1e6*x0 - x1.
+    // H well-conditioned path plus a tiny pivot region: the KKT residual gate
+    // must not reject the solve, and refinement must not loop forever.
+    ProblemBuilder builder("ipm_ill");
+    builder.add_variable(0.0, 1000.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 1000.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -1e6}, {1, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1e6);
+    builder.add_quadratic_term(1, 1, 1e-2);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    ASSERT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm_r.primal[0], 1.0, 1e-3);
+    EXPECT_NEAR(ipm_r.primal[1], 100.0, 1e-1);
+    EXPECT_NEAR(ipm_r.objective_value, -500050.0, 1e-1);
+    EXPECT_LE(ipm_r.regularization_retries, 100u);
 }

@@ -2,26 +2,53 @@
 """
 HyperNova Web Console & REST Cloud API Server
 =============================================
-SIH Problem Statement 26119 | Sovereign Optimization Engine
+Sovereign Optimization Engine
 
 Provides a REST API and Web Console UI for model upload, solve execution,
 capability inspection, solution verification, and telemetry reporting.
 """
 
+import argparse
 import http.server
 import socketserver
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import urllib.parse
 import sys
 
 PORT = 8080
-HYPERNOVA_CLI = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "build", "bin", "hypernova.exe"))
-if not os.path.exists(HYPERNOVA_CLI):
-    # Try current directory build path
-    HYPERNOVA_CLI = "hypernova"
+
+
+def _find_hypernova_cli():
+    """Locate the hypernova CLI binary.
+
+    Resolution order:
+      1. HYPERNOVA_CLI environment variable (explicit override).
+      2. Common repo build directories (build/, build-p0/, build2/, build-debug/).
+      3. The system PATH.
+    Returns the resolved path/name; callers must check existence before use.
+    """
+    env_cli = os.environ.get("HYPERNOVA_CLI")
+    if env_cli and os.path.exists(env_cli):
+        return env_cli
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    for rel in (
+        os.path.join("build", "bin", "hypernova.exe"),
+        os.path.join("build", "bin", "hypernova"),
+        os.path.join("build-p0", "bin", "hypernova.exe"),
+        os.path.join("build2", "bin", "hypernova.exe"),
+        os.path.join("build-debug", "bin", "hypernova.exe"),
+    ):
+        cand = os.path.join(repo_root, rel)
+        if os.path.exists(cand):
+            return cand
+    return shutil.which("hypernova") or "hypernova"
+
+
+HYPERNOVA_CLI = _find_hypernova_cli()
 
 CONSOLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -36,6 +63,15 @@ class HyperNovaAPIHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
+
+    def _cli_unavailable(self):
+        self._set_json_headers(500)
+        self.wfile.write(json.dumps({
+            "error": "HyperNova CLI not found. Build it first "
+                     "(cmake --build build), or set the HYPERNOVA_CLI "
+                     "environment variable to the hypernova executable.",
+            "searched": HYPERNOVA_CLI,
+        }).encode("utf-8"))
 
     def do_OPTIONS(self):
         self._set_json_headers(200)
@@ -80,6 +116,9 @@ class HyperNovaAPIHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_capabilities(self):
         try:
+            if not os.path.exists(HYPERNOVA_CLI):
+                self._cli_unavailable()
+                return
             cmd = [HYPERNOVA_CLI, "capabilities"]
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             self._set_json_headers(200)
@@ -94,6 +133,9 @@ class HyperNovaAPIHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_solve(self, post_data):
         try:
+            if not os.path.exists(HYPERNOVA_CLI):
+                self._cli_unavailable()
+                return
             body = json.loads(post_data.decode("utf-8"))
             model_content = body.get("model_content", "")
             file_format = body.get("format", "mps").lower()
@@ -146,6 +188,9 @@ class HyperNovaAPIHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_inspect(self, post_data):
         try:
+            if not os.path.exists(HYPERNOVA_CLI):
+                self._cli_unavailable()
+                return
             body = json.loads(post_data.decode("utf-8"))
             model_content = body.get("model_content", "")
             file_format = body.get("format", "mps").lower()
@@ -167,17 +212,24 @@ class HyperNovaAPIHandler(http.server.SimpleHTTPRequestHandler):
             self._set_json_headers(500)
             self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
 
-def run_server():
+def run_server(host="0.0.0.0", port=8080):
     print("================================================================================")
     print(" HyperNova Sovereign Optimization Engine — Web Console & Cloud REST Server")
-    print(f" Server running at http://localhost:{PORT}")
+    print(f" Server running at http://localhost:{port}")
     print(f" Using HyperNova CLI binary: {HYPERNOVA_CLI}")
     print("================================================================================")
-    with socketserver.TCPServer(("", PORT), HyperNovaAPIHandler) as httpd:
+    with socketserver.TCPServer((host, port), HyperNovaAPIHandler) as httpd:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\nShutting down server...")
 
+
 if __name__ == "__main__":
-    run_server()
+    parser = argparse.ArgumentParser(description="HyperNova web console & REST API server")
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Address to bind (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=PORT,
+                        help=f"Port to bind (default: {PORT})")
+    args = parser.parse_args()
+    run_server(args.host, args.port)

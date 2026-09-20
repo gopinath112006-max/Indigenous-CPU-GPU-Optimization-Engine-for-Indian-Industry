@@ -53,7 +53,7 @@ COPY --from=builder /app/build/bin/hypernova-bench /usr/local/bin/hypernova-benc
 # Copy console files and industrial benchmarks
 COPY --from=builder /app/console /app/console
 COPY --from=builder /app/benchmarks /app/benchmarks
-COPY --from=builder /app/SIH_DEMO_PACKAGE.md /app/SIH_DEMO_PACKAGE.md
+COPY --from=builder /app/README/SIH_DEMO_PACKAGE.md /app/SIH_DEMO_PACKAGE.md
 
 EXPOSE 8080
 
