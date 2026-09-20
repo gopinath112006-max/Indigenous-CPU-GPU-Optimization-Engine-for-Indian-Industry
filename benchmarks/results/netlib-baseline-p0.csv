@@ -1,0 +1,22 @@
+name,file,problem_type,vars,cons,nnz,integer_vars,status,objective,best_bound,gap,time_s,threads,nodes_per_s,engine,iterations,verified,reference_status,reference_objective,result,message
+25fv47,benchmarks\netlib\25fv47.mps,LP,1571,821,10400,0,TIME_LIMIT,0.0000000000,0.0000000000,0.00000000,60.018992,0,0.0,simplex,832,no,min,5501.8458890000,FAIL,status not optimal; validation skipped; reference objective 5501.845889 not matched
+adlittle,benchmarks\netlib\adlittle.mps,LP,97,56,383,0,OPTIMAL,225494.9631623802,0.0000000000,0.00000000,0.011514,0,0.0,simplex,258,yes,min,225494.9632000000,PASS,
+afiro,benchmarks\netlib\afiro.mps,LP,32,27,83,0,OPTIMAL,-464.7531428571,0.0000000000,0.00000000,0.001142,0,0.0,simplex,36,yes,min,-464.7531419000,PASS,
+bandm,benchmarks\netlib\bandm.mps,LP,472,305,2494,0,ITER_LIMIT,0.0000000000,0.0000000000,0.00000000,40.914805,0,0.0,simplex,626,no,min,-158.6280060000,FAIL,status not optimal; validation skipped; reference objective -158.628006 not matched
+blend,benchmarks\netlib\blend.mps,LP,83,74,491,0,OPTIMAL,-30.8121498458,0.0000000000,0.00000000,0.042483,0,0.0,simplex,509,yes,min,-30.8121508400,PASS,
+dfl001,benchmarks\netlib\dfl001.mps,LP,12230,6071,35632,0,TIME_LIMIT,8222687008.1199989319,0.0000000000,0.00000000,60.011698,0,0.0,auto,0,no,min,11113286.6515999995,FAIL,status not optimal; validation skipped; reference objective 11113286.651600 not matched
+israel,benchmarks\netlib\israel.mps,LP,142,174,2269,0,OPTIMAL,-896644.8218630460,0.0000000000,0.00000000,0.044145,0,0.0,simplex,387,yes,min,-896644.8258000000,PASS,
+kb2,benchmarks\netlib\kb2.mps,LP,41,43,286,0,OPTIMAL,-1749.9001299062,0.0000000000,0.00000000,0.004135,0,0.0,simplex,107,yes,min,-1749.9002540000,PASS,
+recipe,benchmarks\netlib\recipe.mps,LP,180,91,663,0,OPTIMAL,-266.6160000000,0.0000000000,0.00000000,0.009674,0,0.0,simplex,123,yes,min,-266.6160000000,PASS,
+sc105,benchmarks\netlib\sc105.mps,LP,103,105,280,0,OPTIMAL,-52.2020612117,0.0000000000,0.00000000,0.005848,0,0.0,simplex,119,yes,min,-52.2020612100,PASS,
+sc205,benchmarks\netlib\sc205.mps,LP,203,205,551,0,OPTIMAL,-52.2020612117,0.0000000000,0.00000000,0.019628,0,0.0,simplex,233,yes,min,-52.2020612100,PASS,
+sc50a,benchmarks\netlib\sc50a.mps,LP,48,50,130,0,OPTIMAL,-64.5750770586,0.0000000000,0.00000000,0.002135,0,0.0,simplex,53,yes,min,-64.5750770600,PASS,
+sc50b,benchmarks\netlib\sc50b.mps,LP,48,50,118,0,OPTIMAL,-70.0000000000,0.0000000000,0.00000000,0.001544,0,0.0,simplex,48,yes,min,-70.0000000000,PASS,
+sctap1,benchmarks\netlib\sctap1.mps,LP,480,300,1692,0,OPTIMAL,1412.2500000000,0.0000000000,0.00000000,0.127151,0,0.0,simplex,1106,yes,min,1412.2500000000,PASS,
+sctap2,benchmarks\netlib\sctap2.mps,LP,1880,1090,6714,0,OPTIMAL,1724.8071428571,0.0000000000,0.00000000,0.894836,0,0.0,simplex,1573,yes,min,1724.8071000000,PASS,
+sctap3,benchmarks\netlib\sctap3.mps,LP,2480,1480,8874,0,OPTIMAL,1424.0000000000,0.0000000000,0.00000000,1.617026,0,0.0,simplex,1716,yes,min,1424.0000000000,PASS,
+share1b,benchmarks\netlib\share1b.mps,LP,225,117,1151,0,OPTIMAL,-76589.3185791857,0.0000000000,0.00000000,0.061670,0,0.0,simplex,829,yes,min,-76589.3182400000,PASS,
+share2b,benchmarks\netlib\share2b.mps,LP,79,96,694,0,OPTIMAL,-415.7322407414,0.0000000000,0.00000000,0.010920,0,0.0,simplex,231,yes,min,-415.7322410000,PASS,
+shell,benchmarks\netlib\shell.mps,LP,1775,536,3556,0,OPTIMAL,1208825346.0000000000,0.0000000000,0.00000000,0.386273,0,0.0,simplex,1205,yes,min,1208826925.5999999046,FAIL,reference objective 1208826925.600000 not matched
+stair,benchmarks\netlib\stair.mps,LP,467,356,3856,0,OPTIMAL,-251.2669511930,0.0000000000,0.00000000,0.409502,0,0.0,simplex,1120,yes,min,-251.2669510000,PASS,
+tuff,benchmarks\netlib\tuff.mps,LP,587,333,4520,0,ITER_LIMIT,-0.0000000000,0.0000000000,0.00000000,54.599621,0,0.0,simplex,323,no,min,0.2921477651,FAIL,status not optimal; validation skipped; reference objective 0.292148 not matched

@@ -1,0 +1,33 @@
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Local build directories
+build*/
+cmake-build*/
+out/
+
+# Generated benchmark artifacts (regenerable)
+benchmarks/results/
+benchmarks/scaling/
+sweep_*.csv
+sweep_*.json
+b1.csv
+b1.json
+industrial_results.json
+
+# Logs & scratch
+*.log
+scratch/
+.freebuff/
+New folder/
+README_detailed_review.md
+FINAL_ACTION_PLAN.md
+
+# IDE / OS junk
+.vscode/
+.idea/
+*.user
+Thumbs.db
+.DS_Store

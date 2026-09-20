@@ -50,6 +50,9 @@ COPY --from=builder /app/build/bin/hypernova /usr/local/bin/hypernova
 COPY --from=builder /app/build/bin/industrial_demo /usr/local/bin/industrial_demo
 COPY --from=builder /app/build/bin/hypernova-bench /usr/local/bin/hypernova-bench
 
+# The CLI/bench binaries link the HyperNova shared libraries via RPATH /app/build/lib
+COPY --from=builder /app/build/lib /app/build/lib
+
 # Copy console files and industrial benchmarks
 COPY --from=builder /app/console /app/console
 COPY --from=builder /app/benchmarks /app/benchmarks

@@ -33,13 +33,11 @@ Makefile
 Thumbs.db
 .DS_Store
 
-# Generated benchmark sweep outputs (regenerable)
+# Generated benchmark sweep outputs at repo root (regenerable)
 sweep_*.csv
 sweep_*.json
 b1.csv
 b1.json
-benchmarks/results/
-benchmarks/scaling/
 
 # Build log artifacts at repo root
 build-*.log
@@ -51,6 +49,8 @@ qp_debug*.log
 output.log
 scale_bench.log
 New folder/
+industrial_results.json
+README_detailed_review.md
 
 # Python
 __pycache__/

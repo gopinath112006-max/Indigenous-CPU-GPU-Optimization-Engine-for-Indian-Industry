@@ -206,7 +206,7 @@ The currently verified GPU scope is sparse linear-algebra kernel acceleration.
 
 Verified:
 
-**19/19 CTest targets PASS**
+**20/20 CTest targets PASS** (19/19 at original doc time; the QP engine test target was added later — see README §10)
 
 Approximately:
 
@@ -959,7 +959,7 @@ full CTest suite
 
 The baseline requirement remains:
 
-**19/19 tests PASS**
+**20/20 tests PASS** (19/19 at original doc time)
 
 Any regression must be fixed before proceeding.
 
@@ -1250,7 +1250,7 @@ Clean build passes.
 
 ### Tests
 
-19/19 baseline tests continue passing.
+20/20 baseline tests continue passing (incl. the QP engine suite).
 
 ### Solver
 

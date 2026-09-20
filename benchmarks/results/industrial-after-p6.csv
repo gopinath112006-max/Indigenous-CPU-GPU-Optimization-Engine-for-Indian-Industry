@@ -1,0 +1,6 @@
+name,file,problem_type,vars,cons,nnz,integer_vars,status,objective,best_bound,gap,time_s,threads,nodes_per_s,engine,iterations,verified,reference_status,reference_objective,result,message
+cogen_power_milp,benchmarks\industrial-cases\cogen_power_milp.mps,MILP,7,8,18,3,OPTIMAL,5420.0000000000,4720.0000000000,0.00000000,0.005791,0,518.0,branch-and-bound,3,yes,min,5420.0000000000,PASS,
+crude_blending_qp,benchmarks\industrial-cases\crude_blending_qp.lp,QP,5,4,20,0,OPTIMAL,22692.1186264308,0.0000000000,0.00000000,0.331360,0,0.0,qp,0,yes,min,22692.1186260000,PASS,
+hydrogen_network_lp,benchmarks\industrial-cases\hydrogen_network_lp.mps,LP,5,4,8,0,OPTIMAL,69.9600000000,0.0000000000,0.00000000,0.000213,0,0.0,simplex,5,yes,min,69.9600000000,PASS,
+logistics_freight_milp,benchmarks\industrial-cases\logistics_freight_milp.mps,MILP,8,11,17,3,OPTIMAL,7690.0000000000,7690.0000000000,0.00000000,0.000302,0,0.0,branch-and-bound,0,yes,min,7690.0000000000,PASS,
+refinery_production_planning_milp,benchmarks\industrial-cases\refinery_production_planning_milp.mps,MILP,15,18,33,6,OPTIMAL,2137300.0000000000,1405500.0000000000,0.00000000,0.000384,0,0.0,branch-and-bound,0,yes,max,2137300.0000000000,PASS,

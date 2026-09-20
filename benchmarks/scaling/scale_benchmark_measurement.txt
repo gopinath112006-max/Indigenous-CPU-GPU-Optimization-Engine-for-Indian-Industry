@@ -1,0 +1,27 @@
+HyperNova scale_benchmark.exe — measurement record (pre-fix AUTO dispatch)
+
+Binary: build2/bin/scale_benchmark.exe (built from sources with AUTO LP dispatch
+threshold '> 10000' vars before commit --file api/cpp/api.cpp set it to '>= 10000')
+Engine used: AUTO (Simplex chosen because tier is exactly 10,000 variables)
+Host: Windows, MinGW GCC C++20, single-host run.
+Time limit applied externally: none (run killed at ~420 s).
+
+Captured stdout (truncated after first tier):
+
+================================================================================
+ HyperNova Sovereign Solver — Scalability & High-Dimensional Stress Benchmark
+ SIH Problem Statement 26119 | High-Scale Optimization Engine Audit
+================================================================================
+
+Suite             Vars        Cons        Nonzeros      Engine      Status      Build (ms)    Solve (ms)    Memory
+--------------------------------------------------------------------------------------------------------------
+SparseLP_10000    10000       5000        10000         AUTO/SimplexFAILED      13.54         302056.91     2 MB
+
+Interpretation:
+  - The 10,000-var tier fell onto the Simplex path (AUTO required n_vars > 10000
+    to select the IPM) and FAILED after ~302 s.
+  - See docs/BASELINE.md and HYPERNOVA_FINAL_SUBMISSION_REPORT.md §4.1 for the
+    corrective action (>= 10000 -> IPM) and why a post-fix number is not yet
+    claimed (scale_benchmark.exe intermittently exits 0xFFFFFFFF or hangs
+    without output when stdout is redirected/harnessed on this host; same
+    non-deterministic stdio instability observed on the netlib_25fv47 CLI run).

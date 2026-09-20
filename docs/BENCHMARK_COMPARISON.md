@@ -28,14 +28,14 @@ The 5 production-grade MRPL refinery optimization models evaluate all supported 
 
 | Model Identifier | Mathematical Class | Variables (Cont / Int) | Constraints | HyperNova Status | Objective Value | Independent Verification |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **crude_blending_qp** | Convex QP | 5 / 0 | 4 | **OPTIMAL** | $28,590.60\text{ k/day}$ | **PASS** |
+| **crude_blending_qp** | Convex QP | 5 / 0 | 4 | **OPTIMAL** | $22,692.12\text{ k/day}$ | **PASS** |
 | **refinery_production_planning_milp** | MILP | 15 / 6 | 18 | **OPTIMAL** | $\$2,137,300.00\text{ k}$ | **PASS** |
 | **logistics_freight_milp** | MILP | 8 / 3 | 11 | **OPTIMAL** | $\$7,690.00\text{ k/month}$ | **PASS** |
 | **cogen_power_milp** | MILP | 7 / 3 | 8 | **OPTIMAL** | $\$5,420.00\text{ /hr}$ | **PASS** |
 | **hydrogen_network_lp** | LP | 5 / 0 | 4 | **OPTIMAL** | $\$69.96\text{ k/hr}$ | **PASS** |
 
 ### Solution Agreement & Verification Highlights
-- **Crude Oil Blending QP**: Achieves exact minimum procurement cost ($28,590.60\text{ k/day}$) satisfying BS-VI sulfur limits ($\le 1.80\%$) and API gravity ($\ge 31.0$).
+- **Crude Oil Blending QP**: Achieves exact minimum procurement cost ($22,692.12\text{ k/day}$) satisfying BS-VI sulfur limits ($\le 1.80\%$) and API gravity ($\ge 31.0$).
 - **Refinery Production Planning MILP**: Optimizes hydrocracker mode selection across a 3-month horizon with zero integrality violation.
 - **Hydrogen Network LP**: Solved in 5 simplex iterations ($0.34\text{ ms}$) matching exact analytical mass balance ($128.8\text{ k Nm}^3/\text{hr}$ HGU reformer stream).
 
@@ -62,6 +62,8 @@ HyperNova was evaluated on representative benchmarks across Linear, Mixed-Intege
 | **p0033** | 16 | 33 | 33 | **OPTIMAL** | $3.089000 \times 10^3$ | $3.089000 \times 10^3$ | $0.00\%$ |
 | **pk1** | 45 | 86 | 55 | **OPTIMAL** | $1.100000 \times 10^1$ | $1.100000 \times 10^1$ | $0.00\%$ |
 | **pipex** | 25 | 48 | 32 | **OPTIMAL** | $7.882000 \times 10^2$ | $7.882000 \times 10^2$ | $0.00\%$ |
+
+> **Note:** the four instances above were solved to proven optimality in milestone builds at open time limits. The **shipped 10-instance MIPLIB set** is measured fresh under the 60-second methodology in `README.md` §11.3 (1/10 proven within 60 s; Time-Limit incumbents reported honestly).
 
 ---
 

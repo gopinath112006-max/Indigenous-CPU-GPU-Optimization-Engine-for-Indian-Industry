@@ -1,0 +1,3 @@
+name,file,problem_type,vars,cons,nnz,integer_vars,status,objective,best_bound,gap,time_s,threads,nodes_per_s,engine,iterations,verified,reference_status,reference_objective,result,message
+agg,benchmarks\mittelmann\agg.mps,LP,163,488,2410,0,OPTIMAL,-35991767.2865764424,0.0000000000,0.00000000,0.058665,0,0.0,simplex,235,yes,min,-35991767.2865765020,PASS,
+fit2p,benchmarks\mittelmann\fit2p.mps,LP,13525,3000,50284,0,TIME_LIMIT,2675130.0000000000,0.0000000000,0.00000000,60.425986,0,0.0,auto,0,no,min,68464.2932938322,FAIL,status not optimal; validation skipped; reference objective 68464.293294 not matched

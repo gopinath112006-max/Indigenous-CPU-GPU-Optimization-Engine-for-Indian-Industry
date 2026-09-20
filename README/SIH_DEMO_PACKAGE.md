@@ -71,7 +71,7 @@ HyperNova was evaluated against 5 real-world refinery process optimization model
 ### Case 1: Crude Oil Blending & Quality Giveaway Optimization (Convex QP)
 - **Domain**: SPM crude imports, distillation throughput, BS-VI Euro-VI fuel quality compliance.
 - **Mathematical Class**: Convex Quadratic Programming ($5\text{ variables}, 4\text{ constraints}, 15\text{ nonzeros}$).
-- **Solver Verdict**: **OPTIMAL** (Objective: $\$28,590.60\text{ k/day}$, Verified Pass).
+- **Solver Verdict**: **OPTIMAL** (Objective: $\$22,692.12\text{ k/day}$, Verified Pass).
 - **Industrial Outcome**: Reduces quality giveaway while processing $320\text{ k bbl/day}$ total blend within sulfur ($\le 1.80\%$) and API gravity ($\ge 31.0$) constraints.
 
 ### Case 2: Multi-Period Refinery Production Planning & Mode Switching (MILP)
