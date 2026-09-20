@@ -56,3 +56,14 @@ New folder/
 __pycache__/
 *.pyc
 .venv/
+
+# Credentials / secrets / API keys
+.env
+.env.*
+*.env
+*.pem
+*.p12
+*.pfx
+id_rsa*
+credentials.json
+secrets.*
