@@ -31,7 +31,7 @@ enum class RatioTest {
 struct SimplexOptions {
     SimplexAlgorithm algorithm = SimplexAlgorithm::PRIMAL;
     PricingStrategy pricing = PricingStrategy::DEVEX;
-    RatioTest ratio_test = RatioTest::STANDARD;
+    RatioTest ratio_test = RatioTest::HARRIS_TWO_PASS;
     int max_iterations = 1000000;
     double time_limit_seconds = 0.0;
     bool anti_cycling = true;

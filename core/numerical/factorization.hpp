@@ -135,6 +135,8 @@ private:
     std::vector<double> dense_L_;
     std::vector<double> dense_U_;
     std::size_t dense_n_ = 0;
+    std::vector<double> row_scale_;
+    std::vector<double> col_scale_;
     std::vector<EtaUpdate> eta_chain_;
     FactorizationStats stats_;
     ToleranceConfig tol_;

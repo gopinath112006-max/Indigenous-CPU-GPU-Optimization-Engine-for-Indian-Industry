@@ -266,7 +266,18 @@ void SparseLU::symbolic_analysis(const SparseMatrix& A) {
     symbolic_.row_perm.resize(n);
     symbolic_.col_perm.resize(m);
     std::iota(symbolic_.row_perm.begin(), symbolic_.row_perm.end(), 0);
+    
+    std::vector<std::size_t> col_deg(m, 0);
+    if (A.order() == StorageOrder::CSR) {
+        for (std::size_t k = 0; k < A.nnz(); ++k) {
+            col_deg[A.col_indices()[k]]++;
+        }
+    }
     std::iota(symbolic_.col_perm.begin(), symbolic_.col_perm.end(), 0);
+    std::sort(symbolic_.col_perm.begin(), symbolic_.col_perm.end(), [&](std::size_t a, std::size_t b) {
+        if (col_deg[a] != col_deg[b]) return col_deg[a] < col_deg[b];
+        return a < b;
+    });
 
     symbolic_.L_row_ptr.assign(n + 1, 0);
     symbolic_.U_row_ptr.assign(n + 1, 0);
@@ -331,18 +342,48 @@ void SparseLU::symbolic_analysis(const SparseMatrix& A) {
 }
 
 void SparseLU::numeric_factorization(const SparseMatrix& A) {
-    // Debug escape hatch: HYPERNOVA_DENSE_FACTOR=1 forces the reference dense
-    // elimination (O(n^3) scratch) for A/B comparisons. The default sparse
-    // left-looking path is numerically equivalent partial-pivoting LU.
+    const std::size_t n = A.rows();
+    row_scale_.assign(n, 1.0);
+    col_scale_.assign(n, 1.0);
+    if (n > 0) {
+        for (std::size_t i = 0; i < n; ++i) {
+            double rmax = 0.0;
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                rmax = std::max(rmax, std::abs(A.values()[k]));
+            }
+            if (rmax > 1e-12) row_scale_[i] = 1.0 / rmax;
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                std::size_t j = A.col_indices()[k];
+                double val = std::abs(A.values()[k]) * row_scale_[i];
+                col_scale_[j] = std::max(col_scale_[j], val);
+            }
+        }
+        for (std::size_t j = 0; j < n; ++j) {
+            if (col_scale_[j] > 1e-12) col_scale_[j] = 1.0 / col_scale_[j];
+            else col_scale_[j] = 1.0;
+        }
+    }
+
+    SparseMatrix scaled_A = A;
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t k = scaled_A.row_ptr()[i]; k < scaled_A.row_ptr()[i + 1]; ++k) {
+            std::size_t j = scaled_A.col_indices()[k];
+            scaled_A.mutable_values()[k] *= row_scale_[i] * col_scale_[j];
+        }
+    }
+
     const char* dense_env = std::getenv("HYPERNOVA_DENSE_FACTOR");
     if (dense_env != nullptr && std::strcmp(dense_env, "1") == 0) {
-        numeric_factorization_dense(A);
+        numeric_factorization_dense(scaled_A);
         return;
     }
-    numeric_factorization_sparse(A);
+    numeric_factorization_sparse(scaled_A);
 }
 
 void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
+std::cerr << "DENSE FACTORIZATION!\n";
     const std::size_t n = A.rows();
     dense_n_ = n;
     L_values_.clear();
@@ -388,39 +429,41 @@ void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
     std::size_t rank = 0;
     bool singular = false;
 
-    for (std::size_t col = 0; col < n; ++col) {
-        std::size_t piv = col;
-        double best = std::abs(M[pivot_row[col] * n + col]);
-        for (std::size_t r = col + 1; r < n; ++r) {
+    for (std::size_t cstep = 0; cstep < n; ++cstep) {
+        std::size_t col = symbolic_.col_perm.empty() ? cstep : symbolic_.col_perm[cstep];
+        std::size_t piv = cstep;
+        double best = std::abs(M[pivot_row[cstep] * n + col]);
+        for (std::size_t r = cstep + 1; r < n; ++r) {
             const double v = std::abs(M[pivot_row[r] * n + col]);
             if (v > best) {
                 best = v;
                 piv = r;
             }
         }
-        std::swap(pivot_row[col], pivot_row[piv]);
-        if (piv != col) {
-            for (std::size_t k = 0; k < col; ++k) {
-                std::swap(dense_L_[col * n + k], dense_L_[piv * n + k]);
+        std::swap(pivot_row[cstep], pivot_row[piv]);
+        if (piv != cstep) {
+            for (std::size_t k = 0; k < cstep; ++k) {
+                std::size_t k_col = symbolic_.col_perm.empty() ? k : symbolic_.col_perm[k];
+                std::swap(dense_L_[cstep * n + k_col], dense_L_[piv * n + k_col]);
             }
         }
 
-        const double pivot = M[pivot_row[col] * n + col];
+        const double pivot = M[pivot_row[cstep] * n + col];
         if (std::abs(pivot) <= std::max(tol_.singular_tol(), 1e-14)) {
             singular = true;
             continue;
         }
 
         dense_U_[col * n + col] = pivot;
-        for (std::size_t c = col + 1; c < n; ++c) {
-            dense_U_[col * n + c] = M[pivot_row[col] * n + c];
+        for (std::size_t c = cstep + 1; c < n; ++c) {
+            dense_U_[col * n + c] = M[pivot_row[cstep] * n + c];
         }
 
-        for (std::size_t r = col + 1; r < n; ++r) {
+        for (std::size_t r = cstep + 1; r < n; ++r) {
             const double mult = M[pivot_row[r] * n + col] / pivot;
             dense_L_[r * n + col] = mult;
-            for (std::size_t c = col; c < n; ++c) {
-                M[pivot_row[r] * n + c] -= mult * M[pivot_row[col] * n + c];
+            for (std::size_t c = cstep; c < n; ++c) {
+                M[pivot_row[r] * n + c] -= mult * M[pivot_row[cstep] * n + c];
             }
         }
         ++rank;
@@ -440,8 +483,7 @@ void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
     }
 
     symbolic_.row_perm = pivot_row;
-    symbolic_.col_perm.resize(n);
-    std::iota(symbolic_.col_perm.begin(), symbolic_.col_perm.end(), 0);
+
 
     std::vector<std::vector<std::size_t>> L_pattern(n);
     std::vector<std::vector<std::size_t>> U_pattern(n);
@@ -540,6 +582,7 @@ void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
 }
 
 void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
+std::cerr << "SPARSE FACTORIZATION!\n";
     const std::size_t n = A.rows();
     dense_n_ = n;
     L_values_.clear();
@@ -574,8 +617,7 @@ void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
 
     // Default initialize the empty topology so downstream readers are valid
     // even if an early branch bails out.
-    symbolic_.col_perm.resize(n);
-    std::iota(symbolic_.col_perm.begin(), symbolic_.col_perm.end(), 0);
+
     symbolic_.row_perm.assign(n, 0);
     symbolic_.L_row_ptr.assign(n + 1, 0);
     symbolic_.U_row_ptr.assign(n + 1, 0);
@@ -933,6 +975,7 @@ void SparseLU::solve(std::vector<double>& x) const {
         }
     }
 
+    if (!symbolic_.col_perm.empty()) apply_col_perm_inv(x);
     apply_eta_forward(x);
 }
 
@@ -951,6 +994,7 @@ void SparseLU::solve_transpose(std::vector<double>& x) const {
     if (n == 0 || x.size() != n) return;
 
     apply_eta_transpose(x);
+    if (!symbolic_.col_perm.empty()) apply_col_perm(x);
 
     // z = U^{-T} b using the CSC pattern of U (rows with U[k][i], k < i).
     {

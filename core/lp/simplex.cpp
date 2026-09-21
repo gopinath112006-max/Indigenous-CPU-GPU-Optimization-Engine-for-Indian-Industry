@@ -651,7 +651,11 @@ try {
 
     auto run_phase_loop = [&]() {
         double prev_obj = compute_obj();
+        std::cerr << "INITIAL OBJ: " << prev_obj << "\n";
         int stall = 0;
+        bool initial_feasible = true;
+        for (double val : basic_solution_) if (val < -1e-6) initial_feasible = false;
+        std::cerr << "INITIAL FEASIBLE: " << initial_feasible << "\n";
         int nan_streak = 0;
         const bool prof = std::getenv("HYPERNOVA_SIMPLEX_PROF") != nullptr;
         double t_dual = 0.0, t_rc = 0.0, t_enter = 0.0, t_leave = 0.0, t_pivot = 0.0, t_update = 0.0;
@@ -819,6 +823,7 @@ try {
             }
             result.objective_value += problem.obj_offset;
             result.iterations = total_iters;
+std::cerr << "TOTAL ITERS: " << total_iters << "\n";
             auto end_time = std::chrono::high_resolution_clock::now();
             result.solve_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
             return result;
@@ -829,6 +834,7 @@ try {
             result.status = p1_status;
             result.primal.resize(n_original_vars_, 0.0);
             result.iterations = total_iters;
+std::cerr << "TOTAL ITERS: " << total_iters << "\n";
             auto end_time = std::chrono::high_resolution_clock::now();
             result.solve_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
             return result;
@@ -886,6 +892,7 @@ try {
 
     result.status = run_phase_loop();
     result.iterations = total_iters;
+std::cerr << "TOTAL ITERS: " << total_iters << "\n";
 
     if (result.status == model::ProblemStatus::OPTIMAL) {
         // Numerical cleanup: the terminal basis may sit at the end of a long
@@ -902,6 +909,7 @@ try {
         if (!check_optimality()) {
             result.status = run_phase_loop();
             result.iterations = total_iters;
+std::cerr << "TOTAL ITERS: " << total_iters << "\n";
         }
     }
 
@@ -1009,6 +1017,7 @@ try {
         perturb_level_ = 0;
         result.status = run_phase_loop();
         result.iterations = total_iters;
+std::cerr << "TOTAL ITERS: " << total_iters << "\n";
         primal_feasible = finalize_and_check();
     }
     if (result.status == model::ProblemStatus::OPTIMAL && !primal_feasible) {
@@ -1314,7 +1323,7 @@ int SimplexSolver::select_entering_variable() {
     // Anti-cycling fallback: Bland's index scan is cyclically safe, so it is the
     // default entering rule (and the forced rule on a perturbed problem). The
     // explicit pricing strategies below apply only when bland_rule is disabled.
-    if (options_.bland_rule || perturbed_) {
+    if (options_.bland_rule) {
         for (std::size_t j = 0; j < nvars; ++j) {
             if (nonbasis_[j] < 0) continue;
             if (!phase1_active_ && artificial_cols_[j]) continue;
@@ -1588,25 +1597,31 @@ void SimplexSolver::apply_perturbation() {
     if (!basis_factorization_ || basic_solution_.empty()) return;
     ++perturb_level_;
     std::size_t ncons = basis_.size();
-    std::vector<double> b(ncons);
-    std::vector<double> saved_rhs(ncons);
-    for (std::size_t i = 0; i < ncons; ++i) {
-        saved_rhs[i] = rhs_values_[i];
-    }
     const double amp = options_.perturbation_factor * static_cast<double>(perturb_level_);
+    
+    std::vector<double> delta_x(ncons, 0.0);
     for (std::size_t i = 0; i < ncons; ++i) {
-        rhs_values_[i] = problem_->constraints[i].rhs + amp * (1.0 + static_cast<double>(i));
-        b[i] = rhs_values_[i];
-    }
-    basis_factorization_->solve(b);
-    for (double val : b) {
-        if (val < -tol_.feasibility_tol()) {
-            rhs_values_.assign(saved_rhs.begin(), saved_rhs.end());
-            --perturb_level_;
-            return;
+        if (basic_solution_[i] <= tol_.feasibility_tol()) {
+            delta_x[i] = amp * (1.0 + static_cast<double>(i));
         }
     }
-    basic_solution_ = std::move(b);
+    
+    std::vector<double> delta_rhs(ncons, 0.0);
+    std::vector<double> col_data;
+    for (std::size_t i = 0; i < ncons; ++i) {
+        if (delta_x[i] == 0.0) continue;
+        int v = basis_[i];
+        if (v < 0) continue;
+        extract_column(problem_->constraint_matrix, static_cast<std::size_t>(v), col_data);
+        for (std::size_t r = 0; r < ncons; ++r) {
+            delta_rhs[r] += col_data[r] * delta_x[i];
+        }
+    }
+    
+    for (std::size_t i = 0; i < ncons; ++i) {
+        rhs_values_[i] += delta_rhs[i];
+        basic_solution_[i] += delta_x[i];
+    }
     perturbed_ = true;
 }
 

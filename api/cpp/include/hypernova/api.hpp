@@ -80,8 +80,8 @@ struct SolverOptions {
     // implemented Devex / steepest-edge pricing and the Harris two-pass
     // ratio test.
     lp::PricingStrategy simplex_pricing = lp::PricingStrategy::DEVEX;
-    lp::RatioTest simplex_ratio_test = lp::RatioTest::STANDARD;
-    bool simplex_bland_rule = true;
+    lp::RatioTest simplex_ratio_test = lp::RatioTest::HARRIS_TWO_PASS;
+    bool simplex_bland_rule = false;
     std::size_t simplex_steepest_edge_shortlist = 16;
 
     std::size_t node_limit = 0;
