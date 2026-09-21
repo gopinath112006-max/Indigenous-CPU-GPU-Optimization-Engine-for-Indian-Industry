@@ -1,3 +1,12 @@
+/**
+ * @file interior_point.cpp
+ * @brief Mehrotra Predictor-Corrector Interior Point Method for Linear Programming.
+ * 
+ * Mathematical techniques used:
+ * - Primal-Dual Interior Point Method
+ * - Mehrotra Predictor-Corrector with adaptive step size
+ * - Sparse Cholesky factorization for normal equations
+ */
 #include "interior_point.hpp"
 #include "simplex.hpp"
 #include "../numerical/refinement.hpp"

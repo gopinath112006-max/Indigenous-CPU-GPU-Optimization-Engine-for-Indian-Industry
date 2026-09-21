@@ -472,9 +472,15 @@ End`
 
                     if (data.report && data.report.verification) {
                         const v = data.report.verification;
-                        document.getElementById("val-verifier").textContent = (v.feasible && v.optimal) ? "PASS" : "PARTIAL";
+                        document.getElementById("val-verifier").innerHTML = (v.feasible && v.optimal) ? 
+                            '<span style="color:var(--success)">PASS</span>' : 
+                            '<span style="color:var(--warning)">PARTIAL</span>';
+                        document.getElementById("val-verifier").title = 
+                            `Primal: ${v.primal_infeasibility.toExponential(2)}\n` +
+                            `Dual: ${v.dual_infeasibility.toExponential(2)}\n` +
+                            `Integrality: ${v.integrality_violation.toExponential(2)}`;
                     } else {
-                        document.getElementById("val-verifier").textContent = "PASS";
+                        document.getElementById("val-verifier").innerHTML = '<span style="color:var(--success)">PASS</span>';
                     }
 
                     // Render table

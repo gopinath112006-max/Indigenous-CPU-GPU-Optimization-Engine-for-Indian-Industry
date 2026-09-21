@@ -1,3 +1,13 @@
+/**
+ * @file branch_and_bound.cpp
+ * @brief Branch-and-Bound and Branch-and-Cut Engine for MILP/MIQP.
+ * 
+ * Mathematical techniques used:
+ * - LP/QP relaxation-based bounding
+ * - Fractional and Pseudocost branching strategies
+ * - Cutting planes (Gomory, MIR, Clique, Cover)
+ * - Work-stealing parallel tree search
+ */
 #include "branch_and_bound.hpp"
 #include "../presolve/presolve.hpp"
 #include "heuristics.hpp"

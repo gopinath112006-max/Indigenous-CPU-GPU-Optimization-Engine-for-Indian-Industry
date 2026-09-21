@@ -58,6 +58,9 @@ COPY --from=builder /app/console /app/console
 COPY --from=builder /app/benchmarks /app/benchmarks
 COPY --from=builder /app/README/SIH_DEMO_PACKAGE.md /app/SIH_DEMO_PACKAGE.md
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/v1/health')" || exit 1
+
 EXPOSE 8080
 
 CMD ["python3", "console/server.py", "--host", "0.0.0.0", "--port", "8080"]

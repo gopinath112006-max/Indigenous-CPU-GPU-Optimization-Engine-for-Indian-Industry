@@ -1,3 +1,13 @@
+/**
+ * @file simplex.cpp
+ * @brief Revised Simplex Method for Linear Programming.
+ * 
+ * Mathematical techniques used:
+ * - Revised Primal and Dual Simplex Algorithms
+ * - Harris two-pass ratio test for numerical stability
+ * - Bland's Rule for anti-cycling guarantees
+ * - Devex / Steepest-Edge pricing strategies
+ */
 #include "simplex.hpp"
 #include "../model/mps_parser.hpp"
 #include <algorithm>
