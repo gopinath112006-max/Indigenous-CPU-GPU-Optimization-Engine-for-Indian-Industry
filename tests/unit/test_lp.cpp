@@ -541,7 +541,8 @@ TEST(SimplexTest, BlandFallbackSurvivesDegeneracy) {
     builder.set_objective(obj, ObjectiveSense::MAXIMIZE);
     Problem prob = builder.build();
 
-    SimplexOptions bland_opts;  // defaults: Bland entering + standard ratio
+    SimplexOptions bland_opts;  // explicit Bland entering + standard ratio
+    bland_opts.bland_rule = true;
     SimplexSolver bland(ToleranceConfig::industrial_defaults(), bland_opts);
     auto r1 = bland.solve(prob);
     EXPECT_EQ(r1.status, ProblemStatus::OPTIMAL);

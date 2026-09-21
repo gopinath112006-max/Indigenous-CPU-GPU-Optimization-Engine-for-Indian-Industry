@@ -46,6 +46,9 @@ struct SolveReport {
 
     std::string engine_used;
     bool gpu_used = false;
+    bool gpu_available = false;
+    std::string compute_backend = "CPU";
+    int gpu_kernel_executions = 0;
     int threads_used = 1;
 
     nlohmann::json to_json() const;

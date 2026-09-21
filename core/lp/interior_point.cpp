@@ -65,6 +65,11 @@ double max_abs(const std::vector<double>& v) {
     return best;
 }
 
+double do_norm(const std::vector<double>& v, std::shared_ptr<execution::IComputeBackend> backend) {
+    if (backend && v.size() >= 10000) return backend->norm_inf(v);
+    return max_abs(v);
+}
+
 model::Problem remove_duplicate_rows(const model::Problem& problem) {
     const auto& A = problem.constraint_matrix;
     const std::size_t n = problem.variables.size();
@@ -489,11 +494,15 @@ InteriorPointResult InteriorPointSolver::solve(const model::Problem& problem) {
             for (std::size_t j = 0; j < f.n(); ++j) rd[j] = tmp_n[j] + z[j] - f.c[j];
 
             double mu = 0.0;
-            for (std::size_t j = 0; j < f.n(); ++j) mu += x[j] * z[j];
+            if (options_.compute_backend && f.n() >= 10000) {
+                mu = options_.compute_backend->dot(x, z);
+            } else {
+                for (std::size_t j = 0; j < f.n(); ++j) mu += x[j] * z[j];
+            }
             mu /= static_cast<double>(f.n());
 
-            if (max_abs(rp) < options_.convergence_tol &&
-                max_abs(rd) < options_.convergence_tol &&
+            if (do_norm(rp, options_.compute_backend) < options_.convergence_tol &&
+                do_norm(rd, options_.compute_backend) < options_.convergence_tol &&
                 mu < options_.complementarity_tol) {
                 done = true;
                 break;
@@ -679,7 +688,7 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
 
             if (std::getenv("HYPERNOVA_IPM_DBG")) {
                 std::cerr << "IPM it=" << iter << " mu=" << mu
-                          << " rp=" << max_abs(rp) << " rd=" << max_abs(rd)
+                          << " rp=" << do_norm(rp, options_.compute_backend) << " rd=" << do_norm(rd, options_.compute_backend)
                           << " ap=" << ap << " ad=" << ad << "\n";
             }
             if (std::getenv("HYPERNOVA_IPM_PROF")) {
@@ -705,7 +714,11 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
             tmp_n = matvec_t(f.M, lam);
             for (std::size_t j = 0; j < f.n(); ++j) rd[j] = tmp_n[j] + z[j] - f.c[j];
             double mu = 0.0;
-            for (std::size_t j = 0; j < f.n(); ++j) mu += x[j] * z[j];
+            if (options_.compute_backend && f.n() >= 10000) {
+                mu = options_.compute_backend->dot(x, z);
+            } else {
+                for (std::size_t j = 0; j < f.n(); ++j) mu += x[j] * z[j];
+            }
             mu /= static_cast<double>(f.n());
 
             // The barrier can stall with tiny mu/rd but a modest primal residual
@@ -713,7 +726,7 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
             // hand the near-converged point to simplex polish for an exact
             // optimum; otherwise fall back to the strict threshold.
             const double rp_tol = options_.crossover ? 1e-2 : 1e-4;
-            if (max_abs(rp) < rp_tol && max_abs(rd) < 1e-4 && mu < 1e-4) {
+            if (do_norm(rp, options_.compute_backend) < rp_tol && do_norm(rd, options_.compute_backend) < 1e-4 && mu < 1e-4) {
                 done = true;
             }
         }
@@ -736,7 +749,7 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
         result.primal = primal;
         result.dual.assign(problem.constraints.size(), 0.0);
 
-        bool is_feasible_incumbent = (max_abs(rp) <= tol_.feasibility_tol());
+        bool is_feasible_incumbent = (do_norm(rp, options_.compute_backend) <= tol_.feasibility_tol());
 
         result.status = numerical_error ? model::ProblemStatus::NUMERICAL_ERROR
                                         : (interrupted ? model::ProblemStatus::INTERRUPTED

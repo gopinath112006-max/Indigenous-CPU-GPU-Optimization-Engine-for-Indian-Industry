@@ -11,6 +11,7 @@
 #include <queue>
 #include <cmath>
 #include <random>
+#include <future>
 
 namespace hypernova::milp {
 
@@ -154,6 +155,14 @@ BranchAndBoundResult BranchAndBoundSolver::solve_serial(const model::Problem& pr
             // Record bound progression
             if (nodes_explored_ % 100 == 0) {
                 stats_.bound_progression.push_back(compute_best_bound());
+                if (std::getenv("HYPERNOVA_MILP_DBG")) {
+                    std::cerr << "MILP [Node " << nodes_explored_ << "] "
+                              << "Pruned: " << nodes_pruned_ << " "
+                              << "BestObj: " << best_objective_ << " "
+                              << "BestBnd: " << compute_best_bound() << " "
+                              << "Gap: " << compute_gap() << " "
+                              << "Cuts: " << cut_pool_.get_active_cuts().size() << "\n";
+                }
             }
 
             // Global solution limit: stop once the requested count of integer
@@ -274,6 +283,25 @@ void BranchAndBoundSolver::process_root_node(const model::Problem& problem) {
             update_best_solution(r, problem);
             r.pruned = true;
             ++nodes_pruned_;
+        } else {
+            std::vector<double> greedy_sol = r.lp_solution;
+            for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+                if (problem.variables[j].type != model::VarType::CONTINUOUS) {
+                    greedy_sol[j] = std::round(greedy_sol[j]);
+                    greedy_sol[j] = std::clamp(greedy_sol[j], problem.variables[j].lower_bound, problem.variables[j].upper_bound);
+                }
+            }
+            RoundingHeuristic rh(tol_);
+            if (rh.check_feasibility(problem, greedy_sol)) {
+                double obj = rh.compute_objective(problem, greedy_sol);
+                if (problem.obj_sense == model::ObjectiveSense::MAXIMIZE) obj = -obj;
+                if (obj < best_objective_ - tol_.feasibility_tol()) {
+                    best_objective_ = obj;
+                    best_solution_ = greedy_sol;
+                    ++stats_.incumbent_improvements;
+                }
+            }
+            apply_heuristics(r, problem);
         }
     } else if (r.status == model::ProblemStatus::ITER_LIMIT ||
                r.status == model::ProblemStatus::TIME_LIMIT ||
@@ -462,7 +490,12 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
             return false;
         };
         lp::SimplexSolver simplex(tol_, simplex_opts);
-        auto lp_result = simplex.solve(node_problem);
+        lp::SimplexResult lp_result;
+        if (node.lp_solved && !node.basis_var_status.empty()) {
+            lp_result = simplex.solve_with_basis(node_problem, node.basis_var_status, node.basis_con_status);
+        } else {
+            lp_result = simplex.solve(node_problem);
+        }
         // The interrupt callback aborts with INTERRUPTED; if the global deadline
         // is what tripped it, report the honest TIME_LIMIT status.
         if (lp_result.status == model::ProblemStatus::INTERRUPTED &&
@@ -478,6 +511,7 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
         relax_primal = std::move(lp_result.primal);
         relax_reduced_costs = std::move(lp_result.reduced_costs);
         relax_objective = lp_result.objective_value;
+        node.basis_var_status = std::move(lp_result.basis_status);
     }
 
     if (relax_status == model::ProblemStatus::OPTIMAL ||
@@ -683,6 +717,13 @@ std::vector<std::size_t> BranchAndBoundSolver::branch(const BnBNode& node, int v
     up_child.bounds = node.bounds;
     up_child.bounds.push_back({static_cast<std::size_t>(var), ceil_val, true});
     up_child.lower_bound = ceil_val;
+
+    if (!node.basis_var_status.empty()) {
+        down_child.basis_var_status = node.basis_var_status;
+        down_child.basis_con_status = node.basis_con_status;
+        up_child.basis_var_status = node.basis_var_status;
+        up_child.basis_con_status = node.basis_con_status;
+    }
 
     const std::size_t down_idx = nodes_.size();
     const std::size_t up_idx = nodes_.size() + 1;
@@ -949,16 +990,29 @@ std::vector<double> BranchAndBoundSolver::strong_branching(const BnBNode& node, 
     double down_degrad = 0.0;
     double up_degrad = 0.0;
 
-    if (solve_node_lp(down_child, problem)) {
-        down_degrad = std::max(0.0, down_child.lower_bound - node.lower_bound);
+    if (options_.threads >= 2) {
+        auto down_future = std::async(std::launch::async, [&]() {
+            bool success = solve_node_lp(down_child, problem);
+            return success ? std::max(0.0, down_child.lower_bound - node.lower_bound) : std::numeric_limits<double>::infinity();
+        });
+        auto up_future = std::async(std::launch::async, [&]() {
+            bool success = solve_node_lp(up_child, problem);
+            return success ? std::max(0.0, up_child.lower_bound - node.lower_bound) : std::numeric_limits<double>::infinity();
+        });
+        down_degrad = down_future.get();
+        up_degrad = up_future.get();
     } else {
-        down_degrad = std::numeric_limits<double>::infinity();
-    }
+        if (solve_node_lp(down_child, problem)) {
+            down_degrad = std::max(0.0, down_child.lower_bound - node.lower_bound);
+        } else {
+            down_degrad = std::numeric_limits<double>::infinity();
+        }
 
-    if (solve_node_lp(up_child, problem)) {
-        up_degrad = std::max(0.0, up_child.lower_bound - node.lower_bound);
-    } else {
-        up_degrad = std::numeric_limits<double>::infinity();
+        if (solve_node_lp(up_child, problem)) {
+            up_degrad = std::max(0.0, up_child.lower_bound - node.lower_bound);
+        } else {
+            up_degrad = std::numeric_limits<double>::infinity();
+        }
     }
 
     return {down_degrad, up_degrad};

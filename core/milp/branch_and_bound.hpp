@@ -51,8 +51,8 @@ struct CutOptions {
     bool mir_cuts = true;
     bool knapsack_cuts = false;
     bool clique_cuts = false;
-    bool flow_cover_cuts = false;
-    int max_cuts_per_node = 50;
+    bool flow_cover_cuts = true;
+    int max_cuts_per_node = 100;
     double cut_efficacy_threshold = 0.01;
 };
 
@@ -117,6 +117,8 @@ struct BnBNode {
     bool claimed = false;   // parallel B&B: exclusively owned by one worker
     int branching_var = -1;  // variable branched on (for pseudocost updates)
     model::ProblemStatus status = model::ProblemStatus::UNKNOWN;
+    std::vector<int> basis_var_status;
+    std::vector<int> basis_con_status;
 };
 
 struct BranchAndBoundResult {

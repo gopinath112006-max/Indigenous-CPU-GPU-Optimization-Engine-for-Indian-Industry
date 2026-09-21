@@ -241,8 +241,12 @@ void InteriorPointQPSolver::initialize(const model::Problem& problem) {
         } else if (ub < INF) {
             xj = ub - 1.0;
         }
-        if (lb > -INF) xj = std::max(xj, lb + 1e-4);
-        if (ub < INF) xj = std::min(xj, ub - 1e-4);
+        if (lb > -INF && ub < INF && ub - lb < 0.1) {
+            xj = (lb + ub) / 2.0;
+        } else {
+            if (lb > -INF) xj = std::max(xj, lb + 1e-4);
+            if (ub < INF) xj = std::min(xj, ub - 1e-4);
+        }
         x_[j] = xj;
     }
 
@@ -254,10 +258,26 @@ void InteriorPointQPSolver::initialize(const model::Problem& problem) {
     lambdag_.assign(n_ineq_, 1.0);
 
     for (std::size_t l = 0; l < n_lb_; ++l) {
-        sl_[l] = std::max(x_[lb_var_[l]] - lb_val_[l], MIN_BARRIER_VALUE);
+        std::size_t j = lb_var_[l];
+        double ub = problem.variables[j].upper_bound;
+        double lb = lb_val_[l];
+        double s = x_[j] - lb;
+        if (ub < INF && ub - lb < 0.1) {
+            sl_[l] = std::min((ub - lb) / 4.0, 1.0);
+        } else {
+            sl_[l] = std::max(s, MIN_BARRIER_VALUE);
+        }
     }
     for (std::size_t u = 0; u < n_ub_; ++u) {
-        su_[u] = std::max(ub_val_[u] - x_[ub_var_[u]], MIN_BARRIER_VALUE);
+        std::size_t j = ub_var_[u];
+        double lb = problem.variables[j].lower_bound;
+        double ub = ub_val_[u];
+        double s = ub - x_[j];
+        if (lb > -INF && ub - lb < 0.1) {
+            su_[u] = std::min((ub - lb) / 4.0, 1.0);
+        } else {
+            su_[u] = std::max(s, MIN_BARRIER_VALUE);
+        }
     }
     const auto& A = problem.constraint_matrix;
     for (std::size_t k = 0; k < n_ineq_; ++k) {
@@ -624,7 +644,7 @@ double InteriorPointQPSolver::compute_alpha_primal() const {
     alpha = std::min(alpha, compute_alpha_pair(sl_, dsl_));
     alpha = std::min(alpha, compute_alpha_pair(su_, dsu_));
     alpha = std::min(alpha, compute_alpha_pair(g_, dg_));
-    return alpha;
+    return std::min(1.0, 0.995 * alpha);
 }
 
 double InteriorPointQPSolver::compute_alpha_dual() const {
@@ -632,7 +652,7 @@ double InteriorPointQPSolver::compute_alpha_dual() const {
     alpha = std::min(alpha, compute_alpha_pair(lambdal_, dlambdal_));
     alpha = std::min(alpha, compute_alpha_pair(lambdau_, dlambdau_));
     alpha = std::min(alpha, compute_alpha_pair(lambdag_, dlambdag_));
-    return alpha;
+    return std::min(1.0, 0.995 * alpha);
 }
 
 void InteriorPointQPSolver::update_variables(double alpha_p, double alpha_d) {
@@ -669,6 +689,7 @@ bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, dou
 
     double primal_res = 0.0;
     double dual_res = 0.0;
+    double comp_res = 0.0;
 
     for (std::size_t i = 0; i < nc; ++i) {
         double sum = 0.0;
@@ -684,10 +705,12 @@ bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, dou
     for (std::size_t l = 0; l < n_lb_; ++l) {
         primal_res = std::max(primal_res,
                               std::abs(x_[lb_var_[l]] - lb_val_[l] - sl_[l]));
+        comp_res = std::max(comp_res, sl_[l] * lambdal_[l]);
     }
     for (std::size_t u = 0; u < n_ub_; ++u) {
         primal_res = std::max(primal_res,
                               std::abs(ub_val_[u] - x_[ub_var_[u]] - su_[u]));
+        comp_res = std::max(comp_res, su_[u] * lambdau_[u]);
     }
 
     std::vector<double> grad(n, 0.0);
@@ -713,11 +736,13 @@ bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, dou
         std::size_t i = ineq_row_[k];
         dual_res = std::max(dual_res,
                             std::abs(static_cast<double>(ineq_sigma_[k]) * y_[i] - lambdag_[k]));
+        comp_res = std::max(comp_res, g_[k] * lambdag_[k]);
     }
 
     return primal_res < options_.convergence_tol &&
            dual_res < options_.convergence_tol &&
-           mu < options_.complementarity_tol;
+           mu < options_.complementarity_tol &&
+           comp_res < options_.convergence_tol;
 }
 
 } // namespace hypernova::qp

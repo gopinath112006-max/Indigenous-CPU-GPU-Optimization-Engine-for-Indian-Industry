@@ -95,6 +95,71 @@ TEST(SolutionVerifierTest, IntegerFeasible) {
     EXPECT_TRUE(verifier.verify_feasible(prob, sol));
 }
 
+
+TEST(SolutionVerifierTest, BoundViolation) {
+    ProblemBuilder builder("test");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    Solution sol;
+    sol.status = ProblemStatus::OPTIMAL;
+    sol.primal = {10.0};
+
+    SolutionVerifier verifier;
+    auto result = verifier.verify_detailed(prob, sol);
+    EXPECT_FALSE(result.feasible);
+    EXPECT_GT(result.primal_infeasibility, 0.0);
+}
+
+TEST(SolutionVerifierTest, NaNInSolution) {
+    ProblemBuilder builder("test");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    Solution sol;
+    sol.status = ProblemStatus::OPTIMAL;
+    sol.primal = {std::numeric_limits<double>::quiet_NaN()};
+
+    SolutionVerifier verifier;
+    auto result = verifier.verify_detailed(prob, sol);
+    EXPECT_FALSE(result.feasible);
+}
+
+TEST(SolutionVerifierTest, ObjectiveDiscrepancy) {
+    ProblemBuilder builder("test");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 1.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    Solution sol;
+    sol.status = ProblemStatus::OPTIMAL;
+    sol.primal = {5.0};
+    sol.objective_value = 100.0; // Incorrect, should be 5.0
+
+    SolutionVerifier verifier;
+    auto result = verifier.verify_detailed(prob, sol);
+    EXPECT_FALSE(result.optimal);
+    EXPECT_GT(result.objective_discrepancy, 0.0);
+}
+
+TEST(SolutionVerifierTest, ObjectiveMatches) {
+    ProblemBuilder builder("test");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 2.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    Solution sol;
+    sol.status = ProblemStatus::OPTIMAL;
+    sol.primal = {5.0};
+    sol.objective_value = 10.0; // Correct
+
+    SolutionVerifier verifier;
+    auto result = verifier.verify_detailed(prob, sol);
+    EXPECT_EQ(result.objective_discrepancy, 0.0);
+}
+
 TEST(SolveReportTest, JSONSerialization) {
     SolveReport report;
     report.problem_name = "test";

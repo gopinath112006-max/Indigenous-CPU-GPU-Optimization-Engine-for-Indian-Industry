@@ -38,6 +38,10 @@ public:
                        std::vector<double>& C,
                        std::size_t ncols_B) = 0;
 
+    virtual double dot(const std::vector<double>& a, const std::vector<double>& b) = 0;
+    virtual void axpy(double alpha, const std::vector<double>& x, std::vector<double>& y) = 0;
+    virtual double norm_inf(const std::vector<double>& v) = 0;
+
     virtual std::size_t device_memory() const = 0;
     virtual std::size_t free_memory() const = 0;
 

@@ -406,7 +406,7 @@ void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
         }
 
         const double pivot = M[pivot_row[col] * n + col];
-        if (std::abs(pivot) <= tol_.singular_tol()) {
+        if (std::abs(pivot) <= std::max(tol_.singular_tol(), 1e-14)) {
             singular = true;
             continue;
         }
@@ -708,7 +708,7 @@ void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
         }
 
         const double pivot = y[col];
-        if (std::abs(pivot) <= tol_.singular_tol()) {
+        if (std::abs(pivot) <= std::max(tol_.singular_tol(), 1e-14)) {
             singular = true;
             continue;
         }

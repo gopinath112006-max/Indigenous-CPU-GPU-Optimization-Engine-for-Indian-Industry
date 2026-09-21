@@ -51,6 +51,13 @@ double Heuristic::compute_objective(const model::Problem& problem, const std::ve
     for (std::size_t j = 0; j < problem.variables.size(); ++j) {
         obj += problem.variables[j].objective_coeff * solution[j];
     }
+    for (const auto& term : problem.quadratic_terms) {
+        if (term.row == term.col) {
+            obj += 0.5 * term.coeff * solution[term.row] * solution[term.row];
+        } else {
+            obj += term.coeff * solution[term.row] * solution[term.col];
+        }
+    }
     return obj;
 }
 RoundingHeuristic::RoundingHeuristic(const numerical::ToleranceConfig& tol, int trials, unsigned seed)

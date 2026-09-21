@@ -40,7 +40,7 @@ TEST(APITest, SolverSolveLP) {
     Solver solver;
     auto result = solver.solve(prob);
 
-    EXPECT_TRUE(result.is_feasible());
+    EXPECT_TRUE(result.is_feasible()) << "Status was: " << static_cast<int>(result.status);
     EXPECT_GT(result.solve_time_ms, 0.0);
 }
 

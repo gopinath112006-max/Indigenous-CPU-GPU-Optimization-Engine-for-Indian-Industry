@@ -26,9 +26,9 @@ std::vector<Cut> CutGenerator::generate_gomory_from_row(const model::Problem& pr
                                                          std::size_t row_idx) {
     std::vector<Cut> cuts;
     const auto& A = problem.constraint_matrix;
-    const auto& con = problem.constraints[row_idx];
+    // const auto& con = problem.constraints[row_idx];
 
-    if (con.sense != model::ConstraintSense::EQ) return cuts;
+    // if (con.sense != model::ConstraintSense::EQ) return cuts;
 
     std::vector<double> row_coeffs(problem.variables.size(), 0.0);
     if (A.order() == model::StorageOrder::CSR) {

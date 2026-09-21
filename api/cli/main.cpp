@@ -35,7 +35,8 @@ void print_usage(const char* prog) {
     std::cout << "  --engine <auto|simplex|ipm|bnb> Solver engine (default: auto)\n";
     std::cout << "  --pricing <dantzig|devex|steepest-edge> Entering pricing (requires --nobland)\n";
     std::cout << "  --ratio-test <standard|harris> Ratio test rule\n";
-    std::cout << "  --nobland                     Disable the Bland anti-cycling entering rule\n";
+    std::cout << "  --nobland                     Fall back from DEVEX pricing to Bland\n";
+    std::cout << "                                anti-cycling entering (default: DEVEX)\n";
     std::cout << "  --node-selection <best-first|depth-first|best-estimate|hybrid>\n";
     std::cout << "                                B&B node-ordering strategy (default: hybrid)\n";
     std::cout << "  --branching <most-fractional|pseudocost|strong|reliability>\n";

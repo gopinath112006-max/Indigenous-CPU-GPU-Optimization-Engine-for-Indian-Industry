@@ -1,11 +1,11 @@
 {
   "all_pass": false,
-  "geomean_time_seconds": 0.029013577080480465,
+  "geomean_time_seconds": 0.05105249235674397,
   "instances": [
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\25fv47.mps",
+      "file": "benchmarks/netlib\\25fv47.mps",
       "gap": 0.0,
       "iterations": 832,
       "message": "status not optimal; validation skipped; reference objective 5501.845889 not matched",
@@ -15,20 +15,20 @@
       "num_integer_vars": 0,
       "num_nonzeros": 10400,
       "num_variables": 1571,
-      "objective": 0.0,
+      "objective": 0.0625,
       "pass": false,
       "problem_type": "LP",
       "reference_objective": 5501.845889,
       "reference_status": "min",
-      "solve_time_seconds": 60.0189917,
-      "status": "TIME_LIMIT",
+      "solve_time_seconds": 60.0185072,
+      "status": "ITER_LIMIT",
       "thread_count": 0,
       "verified": false
     },
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\adlittle.mps",
+      "file": "benchmarks/netlib\\adlittle.mps",
       "gap": 0.0,
       "iterations": 258,
       "message": "",
@@ -43,7 +43,7 @@
       "problem_type": "LP",
       "reference_objective": 225494.9632,
       "reference_status": "min",
-      "solve_time_seconds": 0.011513899999999999,
+      "solve_time_seconds": 0.006642299999999999,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -51,7 +51,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\afiro.mps",
+      "file": "benchmarks/netlib\\afiro.mps",
       "gap": 0.0,
       "iterations": 36,
       "message": "",
@@ -66,7 +66,7 @@
       "problem_type": "LP",
       "reference_objective": -464.7531419,
       "reference_status": "min",
-      "solve_time_seconds": 0.0011420999999999998,
+      "solve_time_seconds": 0.0007798000000000001,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -74,7 +74,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\bandm.mps",
+      "file": "benchmarks/netlib\\bandm.mps",
       "gap": 0.0,
       "iterations": 626,
       "message": "status not optimal; validation skipped; reference objective -158.628006 not matched",
@@ -89,7 +89,7 @@
       "problem_type": "LP",
       "reference_objective": -158.628006,
       "reference_status": "min",
-      "solve_time_seconds": 40.9148047,
+      "solve_time_seconds": 30.2951141,
       "status": "ITER_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -97,7 +97,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\blend.mps",
+      "file": "benchmarks/netlib\\blend.mps",
       "gap": 0.0,
       "iterations": 509,
       "message": "",
@@ -112,7 +112,7 @@
       "problem_type": "LP",
       "reference_objective": -30.81215084,
       "reference_status": "min",
-      "solve_time_seconds": 0.0424833,
+      "solve_time_seconds": 0.0204479,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -120,7 +120,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "auto",
-      "file": "benchmarks\\netlib\\dfl001.mps",
+      "file": "benchmarks/netlib\\dfl001.mps",
       "gap": 0.0,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective 11113286.651600 not matched",
@@ -135,7 +135,7 @@
       "problem_type": "LP",
       "reference_objective": 11113286.6516,
       "reference_status": "min",
-      "solve_time_seconds": 60.0116979,
+      "solve_time_seconds": 60.029513200000004,
       "status": "TIME_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -143,7 +143,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\israel.mps",
+      "file": "benchmarks/netlib\\israel.mps",
       "gap": 0.0,
       "iterations": 387,
       "message": "",
@@ -158,7 +158,7 @@
       "problem_type": "LP",
       "reference_objective": -896644.8258,
       "reference_status": "min",
-      "solve_time_seconds": 0.044145000000000004,
+      "solve_time_seconds": 0.0942091,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -166,7 +166,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\kb2.mps",
+      "file": "benchmarks/netlib\\kb2.mps",
       "gap": 0.0,
       "iterations": 107,
       "message": "",
@@ -181,7 +181,7 @@
       "problem_type": "LP",
       "reference_objective": -1749.900254,
       "reference_status": "min",
-      "solve_time_seconds": 0.0041347,
+      "solve_time_seconds": 0.012155200000000001,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -189,7 +189,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\recipe.mps",
+      "file": "benchmarks/netlib\\recipe.mps",
       "gap": 0.0,
       "iterations": 123,
       "message": "",
@@ -204,7 +204,7 @@
       "problem_type": "LP",
       "reference_objective": -266.616,
       "reference_status": "min",
-      "solve_time_seconds": 0.009673600000000001,
+      "solve_time_seconds": 0.0186936,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -212,7 +212,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sc105.mps",
+      "file": "benchmarks/netlib\\sc105.mps",
       "gap": 0.0,
       "iterations": 119,
       "message": "",
@@ -227,7 +227,7 @@
       "problem_type": "LP",
       "reference_objective": -52.20206121,
       "reference_status": "min",
-      "solve_time_seconds": 0.0058475,
+      "solve_time_seconds": 0.0129723,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -235,7 +235,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sc205.mps",
+      "file": "benchmarks/netlib\\sc205.mps",
       "gap": 0.0,
       "iterations": 233,
       "message": "",
@@ -250,7 +250,7 @@
       "problem_type": "LP",
       "reference_objective": -52.20206121,
       "reference_status": "min",
-      "solve_time_seconds": 0.0196281,
+      "solve_time_seconds": 0.0488302,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -258,7 +258,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sc50a.mps",
+      "file": "benchmarks/netlib\\sc50a.mps",
       "gap": 0.0,
       "iterations": 53,
       "message": "",
@@ -273,7 +273,7 @@
       "problem_type": "LP",
       "reference_objective": -64.57507706,
       "reference_status": "min",
-      "solve_time_seconds": 0.0021349999999999997,
+      "solve_time_seconds": 0.0051304,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -281,7 +281,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sc50b.mps",
+      "file": "benchmarks/netlib\\sc50b.mps",
       "gap": 0.0,
       "iterations": 48,
       "message": "",
@@ -296,7 +296,7 @@
       "problem_type": "LP",
       "reference_objective": -70.0,
       "reference_status": "min",
-      "solve_time_seconds": 0.0015441,
+      "solve_time_seconds": 0.0042565,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -304,7 +304,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sctap1.mps",
+      "file": "benchmarks/netlib\\sctap1.mps",
       "gap": 0.0,
       "iterations": 1106,
       "message": "",
@@ -319,7 +319,7 @@
       "problem_type": "LP",
       "reference_objective": 1412.25,
       "reference_status": "min",
-      "solve_time_seconds": 0.127151,
+      "solve_time_seconds": 0.2955996,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -327,7 +327,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sctap2.mps",
+      "file": "benchmarks/netlib\\sctap2.mps",
       "gap": 0.0,
       "iterations": 1573,
       "message": "",
@@ -342,7 +342,7 @@
       "problem_type": "LP",
       "reference_objective": 1724.8071,
       "reference_status": "min",
-      "solve_time_seconds": 0.8948361,
+      "solve_time_seconds": 1.222148,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -350,7 +350,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\sctap3.mps",
+      "file": "benchmarks/netlib\\sctap3.mps",
       "gap": 0.0,
       "iterations": 1716,
       "message": "",
@@ -365,7 +365,7 @@
       "problem_type": "LP",
       "reference_objective": 1424.0,
       "reference_status": "min",
-      "solve_time_seconds": 1.617026,
+      "solve_time_seconds": 3.4505455,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -373,7 +373,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\share1b.mps",
+      "file": "benchmarks/netlib\\share1b.mps",
       "gap": 0.0,
       "iterations": 829,
       "message": "",
@@ -388,7 +388,7 @@
       "problem_type": "LP",
       "reference_objective": -76589.31824,
       "reference_status": "min",
-      "solve_time_seconds": 0.0616703,
+      "solve_time_seconds": 0.111789,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -396,7 +396,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\share2b.mps",
+      "file": "benchmarks/netlib\\share2b.mps",
       "gap": 0.0,
       "iterations": 231,
       "message": "",
@@ -411,7 +411,7 @@
       "problem_type": "LP",
       "reference_objective": -415.732241,
       "reference_status": "min",
-      "solve_time_seconds": 0.010920299999999999,
+      "solve_time_seconds": 0.0290526,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -419,7 +419,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\shell.mps",
+      "file": "benchmarks/netlib\\shell.mps",
       "gap": 0.0,
       "iterations": 1205,
       "message": "reference objective 1208826925.600000 not matched",
@@ -434,7 +434,7 @@
       "problem_type": "LP",
       "reference_objective": 1208826925.6,
       "reference_status": "min",
-      "solve_time_seconds": 0.3862734,
+      "solve_time_seconds": 0.9017209,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -442,7 +442,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\stair.mps",
+      "file": "benchmarks/netlib\\stair.mps",
       "gap": 0.0,
       "iterations": 1120,
       "message": "",
@@ -457,7 +457,7 @@
       "problem_type": "LP",
       "reference_objective": -251.266951,
       "reference_status": "min",
-      "solve_time_seconds": 0.4095017,
+      "solve_time_seconds": 0.9495303,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -465,7 +465,7 @@
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\netlib\\tuff.mps",
+      "file": "benchmarks/netlib\\tuff.mps",
       "gap": 0.0,
       "iterations": 323,
       "message": "status not optimal; validation skipped; reference objective 0.292148 not matched",
@@ -480,7 +480,7 @@
       "problem_type": "LP",
       "reference_objective": 0.2921477651,
       "reference_status": "min",
-      "solve_time_seconds": 54.599621,
+      "solve_time_seconds": 60.0350472,
       "status": "ITER_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -493,10 +493,10 @@
   "num_unbounded": 0,
   "num_verified": 17,
   "reference_tolerance": "0.000001",
-  "shifted_geomean_time_seconds": 0.20663628875493067,
+  "shifted_geomean_time_seconds": 0.3923759336384016,
   "solver_version": "0.1.0",
   "suite_name": "netlib-baseline-p0",
   "thread_sweep": [],
-  "timestamp": "2026-09-20T16:23:52",
+  "timestamp": "2026-09-21T11:32:34",
   "total": 21
 }

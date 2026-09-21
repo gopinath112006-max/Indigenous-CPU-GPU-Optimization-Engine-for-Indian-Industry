@@ -153,43 +153,55 @@ ScalingResult curtis_reid_scaling_impl(const SparseMatrix& A, int max_iter) {
     result.row_scales.assign(A.rows(), 1.0);
     result.col_scales.assign(A.cols(), 1.0);
 
-    std::vector<double> row_norm(A.rows(), 0.0);
-    std::vector<double> col_norm(A.cols(), 0.0);
-
     for (int iter = 0; iter < max_iter; ++iter) {
-        std::fill(row_norm.begin(), row_norm.end(), 0.0);
-        std::fill(col_norm.begin(), col_norm.end(), 0.0);
-
+        bool changed = false;
+        
+        std::vector<double> row_max(A.rows(), 0.0);
         if (A.order() == StorageOrder::CSR) {
             for (std::size_t i = 0; i < A.rows(); ++i) {
                 for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
-                    double val = std::abs(A.values()[j]);
-                    row_norm[i] += val * val;
-                    col_norm[A.col_indices()[j]] += val * val;
+                    double val = std::abs(A.values()[j]) * result.row_scales[i] * result.col_scales[A.col_indices()[j]];
+                    row_max[i] = std::max(row_max[i], val);
                 }
             }
         } else {
             for (std::size_t j = 0; j < A.cols(); ++j) {
                 for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
-                    double val = std::abs(A.values()[k]);
-                    col_norm[j] += val * val;
-                    row_norm[A.col_indices()[k]] += val * val;
+                    std::size_t i = A.col_indices()[k];
+                    double val = std::abs(A.values()[k]) * result.row_scales[i] * result.col_scales[j];
+                    row_max[i] = std::max(row_max[i], val);
                 }
             }
         }
 
-        bool changed = false;
         for (std::size_t i = 0; i < A.rows(); ++i) {
-            if (row_norm[i] > 0.0) {
-                double scale = 1.0 / std::sqrt(row_norm[i]);
-                result.row_scales[i] *= scale;
+            if (row_max[i] > 0.0 && std::abs(row_max[i] - 1.0) > 1e-4) {
+                result.row_scales[i] *= 1.0 / std::sqrt(row_max[i]);
                 changed = true;
             }
         }
+
+        std::vector<double> col_max(A.cols(), 0.0);
+        if (A.order() == StorageOrder::CSR) {
+            for (std::size_t i = 0; i < A.rows(); ++i) {
+                for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
+                    double val = std::abs(A.values()[j]) * result.row_scales[i] * result.col_scales[A.col_indices()[j]];
+                    col_max[A.col_indices()[j]] = std::max(col_max[A.col_indices()[j]], val);
+                }
+            }
+        } else {
+            for (std::size_t j = 0; j < A.cols(); ++j) {
+                for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
+                    std::size_t i = A.col_indices()[k];
+                    double val = std::abs(A.values()[k]) * result.row_scales[i] * result.col_scales[j];
+                    col_max[j] = std::max(col_max[j], val);
+                }
+            }
+        }
+
         for (std::size_t j = 0; j < A.cols(); ++j) {
-            if (col_norm[j] > 0.0) {
-                double scale = 1.0 / std::sqrt(col_norm[j]);
-                result.col_scales[j] *= scale;
+            if (col_max[j] > 0.0 && std::abs(col_max[j] - 1.0) > 1e-4) {
+                result.col_scales[j] *= 1.0 / std::sqrt(col_max[j]);
                 changed = true;
             }
         }

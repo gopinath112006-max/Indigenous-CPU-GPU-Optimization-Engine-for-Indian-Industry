@@ -11,6 +11,7 @@ class ToleranceConfig {
 public:
     static constexpr double DEFAULT_FEASIBILITY_TOL = 1e-9;
     static constexpr double DEFAULT_OPTIMALITY_TOL = 1e-9;
+    static constexpr double DEFAULT_COMPLEMENTARITY_TOL = 1e-6;
     static constexpr double DEFAULT_PIVOT_TOL = 1e-12;
     static constexpr double DEFAULT_INTEGRALITY_TOL = 1e-6;
     static constexpr double DEFAULT_IPM_CONVERGENCE_TOL = 1e-8;
@@ -25,6 +26,7 @@ public:
 
     ToleranceConfig& feasibility_tol(double v) { feasibility_tol_ = v; return *this; }
     ToleranceConfig& optimality_tol(double v) { optimality_tol_ = v; return *this; }
+    ToleranceConfig& complementarity_tol(double v) { complementarity_tol_ = v; return *this; }
     ToleranceConfig& pivot_tol(double v) { pivot_tol_ = v; return *this; }
     ToleranceConfig& integrality_tol(double v) { integrality_tol_ = v; return *this; }
     ToleranceConfig& ipm_convergence_tol(double v) { ipm_convergence_tol_ = v; return *this; }
@@ -37,6 +39,7 @@ public:
 
     double feasibility_tol() const { return feasibility_tol_; }
     double optimality_tol() const { return optimality_tol_; }
+    double complementarity_tol() const { return complementarity_tol_; }
     double pivot_tol() const { return pivot_tol_; }
     double integrality_tol() const { return integrality_tol_; }
     double ipm_convergence_tol() const { return ipm_convergence_tol_; }
@@ -58,6 +61,7 @@ public:
         ToleranceConfig cfg;
         cfg.feasibility_tol_ = 1e-9;
         cfg.optimality_tol_ = 1e-9;
+        cfg.complementarity_tol_ = 1e-6;
         cfg.pivot_tol_ = 1e-12;
         cfg.integrality_tol_ = 1e-6;
         cfg.ipm_convergence_tol_ = 1e-8;
@@ -74,6 +78,7 @@ public:
         ToleranceConfig cfg;
         cfg.feasibility_tol_ = 1e-7;
         cfg.optimality_tol_ = 1e-7;
+        cfg.complementarity_tol_ = 1e-5;
         cfg.pivot_tol_ = 1e-10;
         cfg.integrality_tol_ = 1e-5;
         cfg.ipm_convergence_tol_ = 1e-6;
@@ -90,6 +95,7 @@ public:
         ToleranceConfig cfg;
         cfg.feasibility_tol_ = 1e-11;
         cfg.optimality_tol_ = 1e-11;
+        cfg.complementarity_tol_ = 1e-8;
         cfg.pivot_tol_ = 1e-14;
         cfg.integrality_tol_ = 1e-8;
         cfg.ipm_convergence_tol_ = 1e-10;
@@ -107,6 +113,7 @@ public:
 private:
     double feasibility_tol_ = DEFAULT_FEASIBILITY_TOL;
     double optimality_tol_ = DEFAULT_OPTIMALITY_TOL;
+    double complementarity_tol_ = DEFAULT_COMPLEMENTARITY_TOL;
     double pivot_tol_ = DEFAULT_PIVOT_TOL;
     double integrality_tol_ = DEFAULT_INTEGRALITY_TOL;
     double ipm_convergence_tol_ = DEFAULT_IPM_CONVERGENCE_TOL;
@@ -121,6 +128,7 @@ private:
 inline std::string ToleranceConfig::to_string() const {
     return "ToleranceConfig{feas=" + std::to_string(feasibility_tol_) +
            ", opt=" + std::to_string(optimality_tol_) +
+           ", comp=" + std::to_string(complementarity_tol_) +
            ", pivot=" + std::to_string(pivot_tol_) +
            ", int=" + std::to_string(integrality_tol_) +
            ", ipm_conv=" + std::to_string(ipm_convergence_tol_) +

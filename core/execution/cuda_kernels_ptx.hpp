@@ -16,4 +16,12 @@ extern const std::string& spmv_scalar_ptx();
 extern const std::string& spmv_warp_ptx();
 extern const std::string& spmm_ptx();
 
+extern const char* const kDotKernel;
+extern const char* const kAxpyKernel;
+extern const char* const kNormInfKernel;
+
+extern const std::string& dot_ptx();
+extern const std::string& axpy_ptx();
+extern const std::string& norm_inf_ptx();
+
 } // namespace hypernova::execution::cuda

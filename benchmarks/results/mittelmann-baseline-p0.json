@@ -1,11 +1,11 @@
 {
   "all_pass": false,
-  "geomean_time_seconds": 0.05866540000000001,
+  "geomean_time_seconds": 0.059004299999999996,
   "instances": [
     {
       "best_bound": 0.0,
       "engine_used": "simplex",
-      "file": "benchmarks\\mittelmann\\agg.mps",
+      "file": "benchmarks/mittelmann\\agg.mps",
       "gap": 0.0,
       "iterations": 235,
       "message": "",
@@ -18,9 +18,9 @@
       "objective": -35991767.28657644,
       "pass": true,
       "problem_type": "LP",
-      "reference_objective": -35991767.2865765,
-      "reference_status": "min",
-      "solve_time_seconds": 0.0586654,
+      "reference_objective": 0.0,
+      "reference_status": "",
+      "solve_time_seconds": 0.0590043,
       "status": "OPTIMAL",
       "thread_count": 0,
       "verified": true
@@ -28,10 +28,10 @@
     {
       "best_bound": 0.0,
       "engine_used": "auto",
-      "file": "benchmarks\\mittelmann\\fit2p.mps",
+      "file": "benchmarks/mittelmann\\fit2p.mps",
       "gap": 0.0,
       "iterations": 0,
-      "message": "status not optimal; validation skipped; reference objective 68464.293294 not matched",
+      "message": "status not optimal; validation skipped",
       "name": "fit2p",
       "nodes_per_second": 0.0,
       "num_constraints": 3000,
@@ -41,9 +41,9 @@
       "objective": 2675130.0,
       "pass": false,
       "problem_type": "LP",
-      "reference_objective": 68464.29329383216,
-      "reference_status": "min",
-      "solve_time_seconds": 60.4259855,
+      "reference_objective": 0.0,
+      "reference_status": "",
+      "solve_time_seconds": 60.1844877,
       "status": "TIME_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -56,10 +56,10 @@
   "num_unbounded": 0,
   "num_verified": 1,
   "reference_tolerance": "0.000001",
-  "shifted_geomean_time_seconds": 0.05866540000000242,
+  "shifted_geomean_time_seconds": 0.05900429999999979,
   "solver_version": "0.1.0",
-  "suite_name": "custom",
+  "suite_name": "mittelmann-baseline-p0",
   "thread_sweep": [],
-  "timestamp": "2026-09-20T16:28:10",
+  "timestamp": "2026-09-21T11:09:18",
   "total": 2
 }

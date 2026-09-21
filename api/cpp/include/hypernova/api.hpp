@@ -75,9 +75,10 @@ struct SolverOptions {
     int rins_frequency = 10;
     numerical::ToleranceConfig tolerances;
     // Simplex internals. Defaults reproduce the baseline engine behavior
-    // (Bland anti-cycling entering + standard ratio test); toggling these on
-    // activates the implemented Devex / steepest-edge pricing and the Harris
-    // two-pass ratio test.
+    // (Bland anti-cycling entering + standard ratio test) which the Netlib
+    // regression suite is pinned against; toggling these on activates the
+    // implemented Devex / steepest-edge pricing and the Harris two-pass
+    // ratio test.
     lp::PricingStrategy simplex_pricing = lp::PricingStrategy::DEVEX;
     lp::RatioTest simplex_ratio_test = lp::RatioTest::STANDARD;
     bool simplex_bland_rule = true;

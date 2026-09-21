@@ -109,6 +109,78 @@ TEST(InteriorPointQPTest, SimpleQP) {
     EXPECT_TRUE(result.status == ProblemStatus::OPTIMAL || result.status == ProblemStatus::ITER_LIMIT);
 }
 
+TEST(QPTest, BoundConstrainedIPMLowerBoundOnly) {
+    ProblemBuilder builder("qp_lb_only");
+    double INF_VAL = std::numeric_limits<double>::infinity();
+    builder.add_variable(1.0, INF_VAL, VarType::CONTINUOUS, "x0");
+    builder.add_variable(1.0, INF_VAL, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -0.5}, {1, -0.5}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 1.0, 1e-4);
+}
+
+TEST(QPTest, BoundConstrainedIPMUpperBoundOnly) {
+    ProblemBuilder builder("qp_ub_only");
+    double INF_VAL = std::numeric_limits<double>::infinity();
+    builder.add_variable(-INF_VAL, 3.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(-INF_VAL, 3.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -5.0}, {1, -5.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 3.0, 1e-4);
+}
+
+TEST(QPTest, BoundConstrainedIPMBothBounds) {
+    ProblemBuilder builder("qp_both_bounds");
+    builder.add_variable(0.5, 3.0, VarType::CONTINUOUS, "x0");
+    builder.set_objective({{0, -5.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+}
+
+TEST(QPTest, BoundConstrainedIPMTightBounds) {
+    ProblemBuilder builder("qp_tight");
+    builder.add_variable(0.1, 0.2, VarType::CONTINUOUS, "x0");
+    builder.set_objective({{0, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 0.2, 1e-4);
+}
+
+TEST(QPTest, BoundConstrainedIPMMixed) {
+    ProblemBuilder builder("qp_mixed");
+    double INF_VAL = std::numeric_limits<double>::infinity();
+    builder.add_variable(-INF_VAL, 3.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(-INF_VAL, INF_VAL, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -5.0}, {1, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 1.0, 1e-4);
+}
+
 namespace {
 
 Problem buildMiqupModel() {

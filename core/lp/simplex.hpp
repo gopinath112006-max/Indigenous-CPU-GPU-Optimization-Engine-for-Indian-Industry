@@ -96,6 +96,7 @@ private:
     int last_entering_ = -1;
     std::size_t iters_since_refactor_ = 0;
     std::size_t refactor_frequency_ = 25;
+    bool recovery_done_ = false;
 
     model::Problem expanded_problem_;
     std::size_t n_original_vars_ = 0;

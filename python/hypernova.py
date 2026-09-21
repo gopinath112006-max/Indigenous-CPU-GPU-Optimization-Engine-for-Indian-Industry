@@ -200,10 +200,13 @@ class Solution:
 
 
 class Solver:
-    def __init__(self, time_limit: float = 60.0, threads: int = 1, use_gpu: bool = False, executable_path: Optional[str] = None):
+    def __init__(self, time_limit: float = 60.0, threads: int = 1, use_gpu: bool = False, presolve: str = "aggressive", scaling: str = "none", compute_target: str = "cpu", executable_path: Optional[str] = None):
         self.time_limit = time_limit
         self.threads = threads
         self.use_gpu = use_gpu
+        self.presolve = presolve
+        self.scaling = scaling
+        self.compute_target = compute_target
         self.exe = executable_path or self._find_executable()
 
     def _find_executable(self) -> str:
@@ -327,6 +330,9 @@ class Solver:
                 self.exe, "solve", tmp_lp,
                 "--time-limit", str(self.time_limit),
                 "--threads", str(self.threads),
+                "--presolve", self.presolve,
+                "--scaling", self.scaling,
+                "--compute-target", self.compute_target,
                 "--report", tmp_rep
             ]
             if self.use_gpu:

@@ -113,36 +113,34 @@ NodePresolveResult NodePresolver::tighten(const model::Problem& problem,
             // Row activity bounds under the current (valid) variable bounds.
             double min_act = 0.0;
             double max_act = 0.0;
-            bool min_inf = false;
-            bool max_inf = false;
+            int min_inf_count = 0;
+            int max_inf_count = 0;
             for (std::size_t t = 0; t < rd.cols.size(); ++t) {
                 const double c = rd.coeffs[t];
                 const std::size_t j = rd.cols[t];
                 const double cmin = contrib_min(c, L[j], U[j]);
                 const double cmax = contrib_max(c, L[j], U[j]);
-                if (std::isinf(cmin)) min_inf = true;
-                if (std::isinf(cmax)) max_inf = true;
-                min_act += cmin;
-                max_act += cmax;
+                if (std::isinf(cmin)) ++min_inf_count; else min_act += cmin;
+                if (std::isinf(cmax)) ++max_inf_count; else max_act += cmax;
             }
 
             switch (rd.sense) {
                 case model::ConstraintSense::LE:
-                    if (!min_inf && min_act > rd.rhs + eps) {
+                    if (min_inf_count == 0 && min_act > rd.rhs + eps) {
                         result.feasible = false;
                         result.message = "row minimum activity exceeds LE rhs";
                         return result;
                     }
                     break;
                 case model::ConstraintSense::GE:
-                    if (!max_inf && max_act < rd.rhs - eps) {
+                    if (max_inf_count == 0 && max_act < rd.rhs - eps) {
                         result.feasible = false;
                         result.message = "row maximum activity falls below GE rhs";
                         return result;
                     }
                     break;
                 case model::ConstraintSense::EQ:
-                    if ((!min_inf && min_act > rd.rhs + eps) || (!max_inf && max_act < rd.rhs - eps)) {
+                    if ((min_inf_count == 0 && min_act > rd.rhs + eps) || (max_inf_count == 0 && max_act < rd.rhs - eps)) {
                         result.feasible = false;
                         result.message = "row activity cannot reach EQ rhs";
                         return result;
@@ -158,9 +156,17 @@ NodePresolveResult NodePresolver::tighten(const model::Problem& problem,
                 const double bmax_j = contrib_max(c, L[j], U[j]);
 
                 if (rd.sense == model::ConstraintSense::LE || rd.sense == model::ConstraintSense::EQ) {
-                    const double base_min_excl = min_act - bmin_j;
-                    const double num = rd.rhs - base_min_excl;
-                    if (!std::isnan(base_min_excl) && !std::isnan(num) && !std::isinf(num)) {
+                    bool can_propagate = false;
+                    double base_min_excl = 0.0;
+                    if (min_inf_count == 0) {
+                        can_propagate = true;
+                        base_min_excl = min_act - bmin_j;
+                    } else if (min_inf_count == 1 && std::isinf(bmin_j)) {
+                        can_propagate = true;
+                        base_min_excl = min_act;
+                    }
+                    if (can_propagate) {
+                        const double num = rd.rhs - base_min_excl;
                         if (c > 0.0) {
                             const double new_ub = num / c;
                             if (new_ub < U[j] - eps) { U[j] = std::max(L[j], new_ub); changed = true; }
@@ -171,9 +177,17 @@ NodePresolveResult NodePresolver::tighten(const model::Problem& problem,
                     }
                 }
                 if (rd.sense == model::ConstraintSense::GE || rd.sense == model::ConstraintSense::EQ) {
-                    const double base_max_excl = max_act - bmax_j;
-                    const double num = rd.rhs - base_max_excl;
-                    if (!std::isnan(base_max_excl) && !std::isnan(num) && !std::isinf(num)) {
+                    bool can_propagate = false;
+                    double base_max_excl = 0.0;
+                    if (max_inf_count == 0) {
+                        can_propagate = true;
+                        base_max_excl = max_act - bmax_j;
+                    } else if (max_inf_count == 1 && std::isinf(bmax_j)) {
+                        can_propagate = true;
+                        base_max_excl = max_act;
+                    }
+                    if (can_propagate) {
+                        const double num = rd.rhs - base_max_excl;
                         if (c > 0.0) {
                             const double new_lb = num / c;
                             if (new_lb > L[j] + eps) { L[j] = std::min(U[j], new_lb); changed = true; }

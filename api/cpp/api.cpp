@@ -47,6 +47,8 @@ milp::BranchingStrategy branching_strategy(BranchingStrategy s) {
     return milp::BranchingStrategy::RELIABILITY;
 }
 
+
+
 } // namespace
 
 struct Solver::Impl {
@@ -138,10 +140,36 @@ auto solve_dispatch = [&](const model::Problem& target) {
             dispatch_budget = 1e-9;
         }
         bool presolved_solution = presolver && presolve_result;
+        auto determine_lp_engine = [&]() {
+            if (pimpl_->options.engine != EngineType::AUTO) return pimpl_->options.engine;
+            double density = 0.0;
+            if (target.variables.size() > 0 && target.constraints.size() > 0) {
+                density = static_cast<double>(target.constraint_matrix.nnz()) / 
+                          (static_cast<double>(target.variables.size()) * target.constraints.size());
+            }
+            if (std::getenv("HYPERNOVA_DISPATCH_DBG")) {
+                std::cerr << "[dispatch] LP vars=" << target.variables.size() 
+                          << " cons=" << target.constraints.size() 
+                          << " density=" << density << "\n";
+            }
+            if (target.variables.size() < 500) {
+                if (std::getenv("HYPERNOVA_DISPATCH_DBG")) std::cerr << "[dispatch] small LP -> SIMPLEX\n";
+                return EngineType::PRIMAL_SIMPLEX;
+            }
+            if (density > 0.20) {
+                if (std::getenv("HYPERNOVA_DISPATCH_DBG")) std::cerr << "[dispatch] dense LP -> SIMPLEX\n";
+                return EngineType::PRIMAL_SIMPLEX;
+            }
+            if (target.variables.size() >= 10000 && density < 0.05) {
+                if (std::getenv("HYPERNOVA_DISPATCH_DBG")) std::cerr << "[dispatch] large sparse LP -> IPM\n";
+                return EngineType::INTERIOR_POINT;
+            }
+            return EngineType::PRIMAL_SIMPLEX;
+        };
+
         if (target.is_lp()) {
-            if (pimpl_->options.engine == EngineType::INTERIOR_POINT ||
-                (pimpl_->options.engine == EngineType::AUTO &&
-                 target.variables.size() >= 10000)) {
+            EngineType engine = determine_lp_engine();
+            if (engine == EngineType::INTERIOR_POINT) {
                 lp::InteriorPointOptions ipm_opts;
                 ipm_opts.time_limit_seconds = dispatch_budget;
                 ipm_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
@@ -314,6 +342,22 @@ solution.status = result.status;
                 qp_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
                 qp::InteriorPointQPSolver qp_solver(pimpl_->options.tolerances, qp_opts);
                 auto result = qp_solver.solve(target);
+                
+                if (result.status == model::ProblemStatus::ITER_LIMIT || result.status == model::ProblemStatus::NUMERICAL_ERROR) {
+                    qp::ActiveSetOptions as_opts;
+                    as_opts.time_limit_seconds = remaining_time;
+                    as_opts.interrupt_callback = [this]() { return pimpl_->interrupted_; };
+                    qp::ActiveSetQPSolver as_solver(pimpl_->options.tolerances, as_opts);
+                    auto as_result = as_solver.solve(target);
+                    if (as_result.status == model::ProblemStatus::OPTIMAL) {
+                        solution.status = as_result.status;
+                        solution.objective_value = as_result.objective_value;
+                        solution.primal = std::move(as_result.primal);
+                        solution.dual = std::move(as_result.dual);
+                        return; // return early to skip the IPM assignment
+                    }
+                }
+                
                 solution.status = result.status;
                 solution.objective_value = result.objective_value;
                 solution.primal = std::move(result.primal);
@@ -436,6 +480,7 @@ presolve::PresolveOptions popts;
         model_sol.dual = solution.dual;
         model_sol.reduced_costs = solution.reduced_costs;
         model_sol.status = solution.status;
+        model_sol.objective_value = solution.objective_value;
     };
     refresh_model_sol();
     if (std::getenv("HYPERNOVA_API_DBG")) {

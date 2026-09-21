@@ -485,6 +485,7 @@ SimplexResult SimplexSolver::solve_impl(const model::Problem& problem, const std
 
 try {
     result.algorithm_used = SimplexAlgorithm::PRIMAL;
+    recovery_done_ = false;
     if (dual_eligible && options_.algorithm == SimplexAlgorithm::DUAL && !warm_var_status && prepare_dual_start()) {
         result.algorithm_used = SimplexAlgorithm::DUAL;
 
@@ -641,6 +642,7 @@ try {
     auto run_phase_loop = [&]() {
         double prev_obj = compute_obj();
         int stall = 0;
+        int nan_streak = 0;
         const bool prof = std::getenv("HYPERNOVA_SIMPLEX_PROF") != nullptr;
         double t_dual = 0.0, t_rc = 0.0, t_enter = 0.0, t_leave = 0.0, t_pivot = 0.0, t_update = 0.0;
         auto now_ = []() { return std::chrono::high_resolution_clock::now(); };
@@ -707,6 +709,24 @@ try {
             t0 = now_();
             update_basis_factorization(leaving, entering);
             t_update += std::chrono::duration<double>(now_() - t0).count();
+            
+            bool num_bad = false;
+            for (double val : basic_solution_) {
+                if (std::isnan(val) || std::isinf(val)) {
+                    num_bad = true;
+                    break;
+                }
+            }
+            if (num_bad) {
+                ++nan_streak;
+                update_basis_factorization(-1, -1);
+                if (nan_streak >= 16) {
+                    return model::ProblemStatus::NUMERICAL_ERROR;
+                }
+            } else {
+                nan_streak = 0;
+            }
+
             total_iters += 1;
 
             const double this_obj = compute_obj();
@@ -880,86 +900,109 @@ try {
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
     }
 
-    result.primal.resize(n_original_vars_, 0.0);
-    std::vector<double> full_primal(nvars, 0.0);
-    for (std::size_t i = 0; i < ncons; ++i) {
-        if (basis_[i] >= 0) {
-            full_primal[static_cast<std::size_t>(basis_[i])] = basic_solution_[i];
-        }
-    }
-    for (std::size_t j = 0; j < n_original_vars_; ++j) {
-        if (free_split_p_[j] != -1) {
-            result.primal[j] = full_primal[static_cast<std::size_t>(free_split_p_[j])] -
-                               full_primal[static_cast<std::size_t>(free_split_n_[j])];
-        } else if (complement_var_[j] != -1) {
-            result.primal[j] = problem.variables[j].upper_bound -
-                               full_primal[static_cast<std::size_t>(complement_var_[j])];
-        } else {
-            result.primal[j] = full_primal[j];
-        }
-    }
-
-    if (result.status == model::ProblemStatus::OPTIMAL) {
-        const auto& A = problem.constraint_matrix;
-        bool feasible = true;
-        double max_viol = 0.0;
-        std::size_t viol_row = 0;
-        std::size_t ncheck = problem.constraints.size();
-        double global_scale = 1.0;
-        for (std::size_t i = 0; i < ncheck; ++i) {
-            double activity = 0.0;
-            double rhs = problem.constraints[i].rhs;
-            double row_ref = 1.0 + std::abs(rhs);
-            if (A.order() == numerical::StorageOrder::CSR) {
-                for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-                    std::size_t j = A.col_indices()[k];
-                    if (j < n_original_vars_) {
-                        activity += A.values()[k] * result.primal[j];
-                        row_ref += std::abs(A.values()[k]) *
-                                   std::max(1.0, std::abs(result.primal[j]));
-                    }
-                }
-            }
-            double vio = 0.0;
-            if (problem.constraints[i].sense == model::ConstraintSense::LE) {
-                vio = activity - rhs;
-            } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
-                vio = rhs - activity;
-            } else {
-                vio = std::abs(activity - rhs);
-            }
-            if (vio > tol_.feasibility_tol() * row_ref) feasible = false;
-            if (vio > max_viol) { max_viol = vio; viol_row = i; }
-            global_scale = std::max(global_scale, row_ref);
-            if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
-                std::cerr << "[simplex-viol] row=" << i << " sense=" << static_cast<int>(problem.constraints[i].sense)
-                          << " rhs=" << rhs << " activity=" << activity << " vio=" << vio
-                          << " nnz=" << (A.row_ptr()[i + 1] - A.row_ptr()[i]) << "\n";
+    auto finalize_and_check = [&]() -> bool {
+        result.primal.resize(n_original_vars_, 0.0);
+        std::vector<double> full_primal(nvars, 0.0);
+        for (std::size_t i = 0; i < ncons; ++i) {
+            if (basis_[i] >= 0) {
+                full_primal[static_cast<std::size_t>(basis_[i])] = basic_solution_[i];
             }
         }
         for (std::size_t j = 0; j < n_original_vars_; ++j) {
-            double val = result.primal[j];
-            double lb = problem.variables[j].lower_bound;
-            double ub = problem.variables[j].upper_bound;
-            double vio = std::max(lb - val, val - ub);
-            if (vio > tol_.feasibility_tol() * global_scale) feasible = false;
-            if (vio > max_viol) { max_viol = vio; viol_row = ncheck + j; }
-            if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
-                std::cerr << "[simplex-viol-var] j=" << j
-                          << " name=" << problem.variables[j].name
-                          << " val=" << val << " lb=" << lb << " ub=" << ub
-                          << " vio=" << vio << "\n";
+            if (free_split_p_[j] != -1) {
+                result.primal[j] = full_primal[static_cast<std::size_t>(free_split_p_[j])] -
+                                   full_primal[static_cast<std::size_t>(free_split_n_[j])];
+            } else if (complement_var_[j] != -1) {
+                result.primal[j] = problem.variables[j].upper_bound -
+                                   full_primal[static_cast<std::size_t>(complement_var_[j])];
+            } else {
+                result.primal[j] = full_primal[j];
             }
         }
-        if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
-            std::cerr << "[simplex-p2] status=" << static_cast<int>(result.status)
-                      << " iters=" << total_iters << " feasible=" << feasible
-                      << " max_viol=" << max_viol << " row=" << viol_row
-                      << " nphase2iter=" << (total_iters) << "\n";
+
+        bool primal_feasible = true;
+        if (result.status == model::ProblemStatus::OPTIMAL) {
+            const auto& A = problem.constraint_matrix;
+            bool feasible = true;
+            double max_viol = 0.0;
+            std::size_t viol_row = 0;
+            std::size_t ncheck = problem.constraints.size();
+            double global_scale = 1.0;
+            for (std::size_t i = 0; i < ncheck; ++i) {
+                double activity = 0.0;
+                double rhs = problem.constraints[i].rhs;
+                double row_ref = 1.0 + std::abs(rhs);
+                if (A.order() == numerical::StorageOrder::CSR) {
+                    for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                        std::size_t j = A.col_indices()[k];
+                        if (j < n_original_vars_) {
+                            activity += A.values()[k] * result.primal[j];
+                            row_ref += std::abs(A.values()[k]) *
+                                       std::max(1.0, std::abs(result.primal[j]));
+                        }
+                    }
+                }
+                double vio = 0.0;
+                if (problem.constraints[i].sense == model::ConstraintSense::LE) {
+                    vio = activity - rhs;
+                } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
+                    vio = rhs - activity;
+                } else {
+                    vio = std::abs(activity - rhs);
+                }
+                if (vio > tol_.feasibility_tol() * row_ref) feasible = false;
+                if (vio > max_viol) { max_viol = vio; viol_row = i; }
+                global_scale = std::max(global_scale, row_ref);
+                if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
+                    std::cerr << "[simplex-viol] row=" << i << " sense=" << static_cast<int>(problem.constraints[i].sense)
+                              << " rhs=" << rhs << " activity=" << activity << " vio=" << vio
+                              << " nnz=" << (A.row_ptr()[i + 1] - A.row_ptr()[i]) << "\n";
+                }
+            }
+            for (std::size_t j = 0; j < n_original_vars_; ++j) {
+                double val = result.primal[j];
+                double lb = problem.variables[j].lower_bound;
+                double ub = problem.variables[j].upper_bound;
+                double vio = std::max(lb - val, val - ub);
+                if (vio > tol_.feasibility_tol() * global_scale) feasible = false;
+                if (vio > max_viol) { max_viol = vio; viol_row = ncheck + j; }
+                if (std::getenv("HYPERNOVA_SIMPLEX_PROF") && vio > 1e-3) {
+                    std::cerr << "[simplex-viol-var] j=" << j
+                              << " name=" << problem.variables[j].name
+                              << " val=" << val << " lb=" << lb << " ub=" << ub
+                              << " vio=" << vio << "\n";
+                }
+            }
+            if (std::getenv("HYPERNOVA_SIMPLEX_PROF")) {
+                std::cerr << "[simplex-p2] status=" << static_cast<int>(result.status)
+                          << " iters=" << total_iters << " feasible=" << feasible
+                          << " max_viol=" << max_viol << " row=" << viol_row
+                          << " nphase2iter=" << (total_iters) << "\n";
+            }
+            primal_feasible = feasible;
         }
-        if (!feasible) {
-            result.status = model::ProblemStatus::INFEASIBLE;
-        }
+        return primal_feasible;
+    };
+
+    bool primal_feasible = finalize_and_check();
+    if (result.status == model::ProblemStatus::OPTIMAL && !primal_feasible &&
+        !recovery_done_ && (options_.bland_rule || perturbed_)) {
+        // Bounded recovery: Bland's lowest-index scan (or a lingering
+        // perturbation) can drive the workload into a numerically degraded
+        // basis that terminates "optimal" while the independent feasibility
+        // re-check above still flags a violated row/variable. Re-drop to the
+        // DEVEX priced entering rule and re-run the phase loop once from the
+        // current basis before committing to a conclusion.
+        recovery_done_ = true;
+        options_.bland_rule = false;
+        if (perturbed_) remove_perturbation();
+        perturb_level_ = 0;
+        result.status = run_phase_loop();
+        result.iterations = total_iters;
+        primal_feasible = finalize_and_check();
+    }
+    if (result.status == model::ProblemStatus::OPTIMAL && !primal_feasible) {
+        result.status = model::ProblemStatus::INFEASIBLE;
     }
 
     result.dual.resize(norig_cons, 0.0);
@@ -1748,6 +1791,17 @@ model::ProblemStatus SimplexSolver::run_dual_loop() {
 
         pivot(q, p);
         update_basis_factorization(p, q);
+
+        bool num_bad = false;
+        for (double val : basic_solution_) {
+            if (std::isnan(val) || std::isinf(val)) {
+                num_bad = true;
+                break;
+            }
+        }
+        if (num_bad) {
+            return model::ProblemStatus::NUMERICAL_ERROR;
+        }
     }
     return model::ProblemStatus::ITER_LIMIT;
 }

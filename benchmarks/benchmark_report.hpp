@@ -47,6 +47,16 @@ struct SuiteReport {
     std::string solver_version = "0.1.0";
     std::string timestamp;
     std::string reference_tolerance = "1e-6";
+    
+    std::string cpu_info;
+    std::string gpu_info;
+    
+    // Options used
+    int threads = 1;
+    std::string presolve;
+    std::string scaling;
+    double gap_tol = 1e-4;
+    double time_limit = 0.0;
     std::vector<InstanceResult> instances;
     std::vector<InstanceResult> thread_sweep; // extra B&B runs across --sweep thread counts
 

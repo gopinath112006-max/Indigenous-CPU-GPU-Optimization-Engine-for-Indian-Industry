@@ -15,6 +15,7 @@ struct VerificationResult {
     double dual_infeasibility = 0.0;
     double complementarity = 0.0;
     double integrality_violation = 0.0;
+    double objective_discrepancy = 0.0;
     std::vector<std::size_t> violated_constraints;
     std::string message;
 };

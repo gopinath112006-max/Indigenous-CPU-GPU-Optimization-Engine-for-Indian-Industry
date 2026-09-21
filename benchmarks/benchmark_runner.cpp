@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <thread>
 
 namespace hypernova::benchmark {
 
@@ -161,6 +162,7 @@ InstanceResult sweep_solve(const hypernova::Problem& problem, int threads,
         model_sol.dual = solution.dual;
         model_sol.reduced_costs = solution.reduced_costs;
         model_sol.status = solution.status;
+        model_sol.objective_value = solution.objective_value;
         auto detail = verifier.verify_detailed(problem, model_sol);
         result.verified = detail.optimal;
         result.pass = detail.optimal;
@@ -182,6 +184,13 @@ SuiteReport run_benchmark(const BenchmarkConfig& config) {
     report.suite_name = config.suite_name;
     report.timestamp = iso_timestamp_now();
     report.reference_tolerance = std::to_string(config.reference_rel_tol);
+    
+    report.threads = config.thread_count;
+    report.gap_tol = config.mip_gap_tolerance;
+    report.time_limit = config.time_limit_seconds;
+    report.cpu_info = "Detected CPUs: " + std::to_string(std::thread::hardware_concurrency());
+    report.gpu_info = "N/A (benchmarks default to CPU deterministic path)";
+    // You could map config.engine/presolve if those fields were available on config, but this is a good baseline.
 
     const ReferenceMap reference = build_reference(config);
     const std::vector<std::string> files = collect_files(config);
@@ -286,6 +295,7 @@ SuiteReport run_benchmark(const BenchmarkConfig& config) {
             model_sol.dual = solution.dual;
             model_sol.reduced_costs = solution.reduced_costs;
             model_sol.status = solution.status;
+            model_sol.objective_value = solution.objective_value;
             auto detail = verifier.verify_detailed(problem, model_sol);
             result.verified = detail.optimal;
             if (!result.verified && result.message.empty()) {

@@ -14,6 +14,9 @@ namespace hypernova::execution::cuda {
 const char* const kSpmvScalarKernel = "hypernova_spmv_scalar";
 const char* const kSpmvWarpKernel = "hypernova_spmv_warp";
 const char* const kSpmmKernel = "hypernova_spmm";
+const char* const kDotKernel = "hypernova_dot";
+const char* const kAxpyKernel = "hypernova_axpy";
+const char* const kNormInfKernel = "hypernova_norm_inf";
 
 // y = A * x, one thread per row. Best for short rows (row length ~< 16).
 const std::string& spmv_scalar_ptx() {
@@ -313,3 +316,63 @@ L_DONE:
 }
 
 } // namespace hypernova::execution::cuda
+
+
+const std::string& dot_ptx() {
+    static const std::string ptx = R"PTX(
+.version 6.0
+.target sm_50
+.address_size 64
+
+.visible .entry hypernova_dot(
+    .param .u64 n,
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 result
+)
+{
+    // A simple placeholder PTX kernel for dot
+    ret;
+}
+)PTX";
+    return ptx;
+}
+
+const std::string& axpy_ptx() {
+    static const std::string ptx = R"PTX(
+.version 6.0
+.target sm_50
+.address_size 64
+
+.visible .entry hypernova_axpy(
+    .param .f64 alpha,
+    .param .u64 n,
+    .param .u64 x,
+    .param .u64 y
+)
+{
+    // A simple placeholder PTX kernel for axpy
+    ret;
+}
+)PTX";
+    return ptx;
+}
+
+const std::string& norm_inf_ptx() {
+    static const std::string ptx = R"PTX(
+.version 6.0
+.target sm_50
+.address_size 64
+
+.visible .entry hypernova_norm_inf(
+    .param .u64 n,
+    .param .u64 v,
+    .param .u64 result
+)
+{
+    // A simple placeholder PTX kernel for norm_inf
+    ret;
+}
+)PTX";
+    return ptx;
+}

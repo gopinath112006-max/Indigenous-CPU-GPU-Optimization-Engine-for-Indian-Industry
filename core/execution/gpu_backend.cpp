@@ -121,6 +121,19 @@ public:
         }
     }
 
+    double dot(const std::vector<double>& a, const std::vector<double>& b) override {
+        double sum = 0.0;
+        for (std::size_t i = 0; i < a.size() && i < b.size(); ++i) sum += a[i] * b[i];
+        return sum;
+    }
+    void axpy(double alpha, const std::vector<double>& x, std::vector<double>& y) override {
+        for (std::size_t i = 0; i < x.size() && i < y.size(); ++i) y[i] += alpha * x[i];
+    }
+    double norm_inf(const std::vector<double>& v) override {
+        double mx = 0.0;
+        for (double val : v) mx = std::max(mx, std::abs(val));
+        return mx;
+    }
     std::size_t device_memory() const override { return 0; }
     std::size_t free_memory() const override { return 0; }
 };
@@ -220,6 +233,19 @@ public:
         }
     }
 
+    double dot(const std::vector<double>& a, const std::vector<double>& b) override {
+        double sum = 0.0;
+        for (std::size_t i = 0; i < a.size() && i < b.size(); ++i) sum += a[i] * b[i];
+        return sum;
+    }
+    void axpy(double alpha, const std::vector<double>& x, std::vector<double>& y) override {
+        for (std::size_t i = 0; i < x.size() && i < y.size(); ++i) y[i] += alpha * x[i];
+    }
+    double norm_inf(const std::vector<double>& v) override {
+        double mx = 0.0;
+        for (double val : v) mx = std::max(mx, std::abs(val));
+        return mx;
+    }
     std::size_t device_memory() const override {
         std::size_t free_b = 0, total_b = 0;
         if (DriverApi::memory_info(free_b, total_b)) return total_b;
@@ -690,6 +716,18 @@ public:
         cpu_->spmm(values, col_indices, row_ptr, B, C, ncols_B);
     }
 
+    double dot(const std::vector<double>& a, const std::vector<double>& b) override {
+        if (cuda_ && a.size() >= 10000) return cuda_->dot(a, b);
+        return cpu_->dot(a, b);
+    }
+    void axpy(double alpha, const std::vector<double>& x, std::vector<double>& y) override {
+        if (cuda_ && x.size() >= 10000) cuda_->axpy(alpha, x, y);
+        else cpu_->axpy(alpha, x, y);
+    }
+    double norm_inf(const std::vector<double>& v) override {
+        if (cuda_ && v.size() >= 10000) return cuda_->norm_inf(v);
+        return cpu_->norm_inf(v);
+    }
     std::size_t device_memory() const override {
         return cuda_ ? cuda_->device_memory() : 0;
     }

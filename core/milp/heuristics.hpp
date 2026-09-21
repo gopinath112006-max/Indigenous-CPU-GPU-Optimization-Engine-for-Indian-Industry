@@ -21,10 +21,11 @@ public:
     virtual HeuristicResult run(const model::Problem& problem,
                                  const std::vector<double>& lp_solution) = 0;
 
-protected:
-    numerical::ToleranceConfig tol_;
     bool check_feasibility(const model::Problem& problem, const std::vector<double>& solution) const;
     double compute_objective(const model::Problem& problem, const std::vector<double>& solution) const;
+
+protected:
+    numerical::ToleranceConfig tol_;
 };
 
 class RoundingHeuristic : public Heuristic {

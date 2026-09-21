@@ -37,6 +37,9 @@ nlohmann::json SolveReport::to_json() const {
     j["optimality_proven"] = optimality_proven;
     j["engine_used"] = engine_used;
     j["gpu_used"] = gpu_used;
+    j["gpu_available"] = gpu_available;
+    j["compute_backend"] = compute_backend;
+    j["gpu_kernel_executions"] = gpu_kernel_executions;
     j["threads_used"] = threads_used;
     return j;
 }
@@ -75,6 +78,9 @@ SolveReport SolveReport::from_json(const nlohmann::json& j) {
     report.optimality_proven = j.value("optimality_proven", false);
     report.engine_used = j.value("engine_used", "");
     report.gpu_used = j.value("gpu_used", false);
+    report.gpu_available = j.value("gpu_available", false);
+    report.compute_backend = j.value("compute_backend", "CPU");
+    report.gpu_kernel_executions = j.value("gpu_kernel_executions", 0);
     report.threads_used = j.value("threads_used", 1);
     return report;
 }

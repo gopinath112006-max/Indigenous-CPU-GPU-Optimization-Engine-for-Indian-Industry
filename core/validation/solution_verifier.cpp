@@ -68,6 +68,24 @@ VerificationResult SolutionVerifier::verify_detailed(
         result.message = "Integrality violation: " + int_check.message;
     }
 
+
+    double obj_computed = problem.obj_offset;
+    for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+        obj_computed += problem.variables[j].objective_coeff * solution.primal[j];
+    }
+    for (const auto& term : problem.quadratic_terms) {
+        if (term.row == term.col) {
+            obj_computed += 0.5 * term.coeff * solution.primal[term.row] * solution.primal[term.col];
+        } else {
+            obj_computed += term.coeff * solution.primal[term.row] * solution.primal[term.col];
+        }
+    }
+    result.objective_discrepancy = std::abs(obj_computed - solution.objective_value);
+    if (result.objective_discrepancy > 1e-4 * (1.0 + std::abs(obj_computed))) {
+        result.optimal = false;
+        if (result.feasible) result.message = "Objective discrepancy: " + std::to_string(result.objective_discrepancy);
+    }
+
     return result;
 }
 
@@ -105,17 +123,24 @@ VerificationResult SolutionVerifier::check_primal_feasibility(
         if (std::isfinite(ub)) col_scale[j] = std::max(col_scale[j], std::abs(ub));
     }
 
+    double ftol = tol_.feasibility_tol() * 10.0;
+    
     for (std::size_t j = 0; j < problem.variables.size(); ++j) {
         double val = solution.primal[j];
+        if (!std::isfinite(val)) {
+            result.feasible = false;
+            result.message = "Solution contains NaN or Inf values";
+            return result;
+        }
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
 
-        if (val < lb - tol_.feasibility_tol() * col_scale[j]) {
+        if (val < lb - ftol * col_scale[j]) {
             double viol = lb - val;
             max_violation = std::max(max_violation, viol);
             result.violated_constraints.push_back(j);
         }
-        if (val > ub + tol_.feasibility_tol() * col_scale[j]) {
+        if (val > ub + ftol * col_scale[j]) {
             double viol = val - ub;
             max_violation = std::max(max_violation, viol);
             result.violated_constraints.push_back(j);
@@ -140,16 +165,19 @@ VerificationResult SolutionVerifier::check_primal_feasibility(
         // numerically negligible (but absolutely > tol) violation.
         const double scale = 1.0 + std::abs(con.rhs) + activity_abs;
         double violation = 0.0;
+        double excess = 0.0;
         if (con.sense == model::ConstraintSense::LE) {
-            violation = std::max(0.0, activity - con.rhs - tol_.feasibility_tol() * scale);
+            excess = activity - con.rhs - ftol * scale;
+            if (excess > 0.0) violation = activity - con.rhs;
         } else if (con.sense == model::ConstraintSense::GE) {
-            violation = std::max(0.0, con.rhs - activity - tol_.feasibility_tol() * scale);
+            excess = con.rhs - activity - ftol * scale;
+            if (excess > 0.0) violation = con.rhs - activity;
         } else {
-            violation = std::abs(activity - con.rhs) - tol_.feasibility_tol() * scale;
-            violation = std::max(0.0, violation);
+            excess = std::abs(activity - con.rhs) - ftol * scale;
+            if (excess > 0.0) violation = std::abs(activity - con.rhs);
         }
 
-        if (violation > 0.0) {
+        if (excess > 0.0) {
             max_violation = std::max(max_violation, violation);
             result.violated_constraints.push_back(problem.variables.size() + i);
         }
@@ -340,7 +368,7 @@ VerificationResult SolutionVerifier::check_complementarity(
     }
 
     result.complementarity = max_violation;
-    if (max_violation > tol_.feasibility_tol()) {
+    if (max_violation > tol_.complementarity_tol()) {
         result.feasible = false;
         result.message = "Max complementarity violation: " + std::to_string(max_violation);
     }

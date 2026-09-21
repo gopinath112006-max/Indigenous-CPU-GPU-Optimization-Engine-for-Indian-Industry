@@ -5,7 +5,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_10050.lp",
+      "file": "benchmarks/qplib\\QPLIB_10050.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective -25.697662 not matched",
@@ -20,7 +20,7 @@
       "problem_type": "MIQP",
       "reference_objective": -25.69766163,
       "reference_status": "min",
-      "solve_time_seconds": 0.0789915,
+      "solve_time_seconds": 0.076078,
       "status": "NUMERICAL_ERROR",
       "thread_count": 0,
       "verified": false
@@ -28,7 +28,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_10056.lp",
+      "file": "benchmarks/qplib\\QPLIB_10056.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective -33.856789 not matched",
@@ -43,7 +43,7 @@
       "problem_type": "MIQP",
       "reference_objective": -33.856788659,
       "reference_status": "min",
-      "solve_time_seconds": 0.1251357,
+      "solve_time_seconds": 0.1271523,
       "status": "NUMERICAL_ERROR",
       "thread_count": 0,
       "verified": false
@@ -51,7 +51,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_10069.lp",
+      "file": "benchmarks/qplib\\QPLIB_10069.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective 0.000000 not matched",
@@ -66,7 +66,7 @@
       "problem_type": "MIQP",
       "reference_objective": 0.0,
       "reference_status": "min",
-      "solve_time_seconds": 60.0201571,
+      "solve_time_seconds": 60.0165463,
       "status": "TIME_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -74,7 +74,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_3871.lp",
+      "file": "benchmarks/qplib\\QPLIB_3871.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective 197.333881 not matched",
@@ -89,7 +89,7 @@
       "problem_type": "MIQP",
       "reference_objective": 197.3338812,
       "reference_status": "min",
-      "solve_time_seconds": 0.0062362,
+      "solve_time_seconds": 0.0071921,
       "status": "NUMERICAL_ERROR",
       "thread_count": 0,
       "verified": false
@@ -97,7 +97,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_3913.lp",
+      "file": "benchmarks/qplib\\QPLIB_3913.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective 42.925000 not matched",
@@ -112,7 +112,7 @@
       "problem_type": "MIQP",
       "reference_objective": 42.925,
       "reference_status": "min",
-      "solve_time_seconds": 70.0497889,
+      "solve_time_seconds": 65.9143158,
       "status": "TIME_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -120,7 +120,7 @@
     {
       "best_bound": null,
       "engine_used": "branch-and-bound-qp",
-      "file": "benchmarks\\qplib\\QPLIB_3980.lp",
+      "file": "benchmarks/qplib\\QPLIB_3980.lp",
       "gap": null,
       "iterations": 0,
       "message": "status not optimal; validation skipped; reference objective 6.325000 not matched",
@@ -135,7 +135,7 @@
       "problem_type": "MIQP",
       "reference_objective": 6.325,
       "reference_status": "min",
-      "solve_time_seconds": 60.1254843,
+      "solve_time_seconds": 60.0365441,
       "status": "TIME_LIMIT",
       "thread_count": 0,
       "verified": false
@@ -150,8 +150,8 @@
   "reference_tolerance": "0.000001",
   "shifted_geomean_time_seconds": 0.0,
   "solver_version": "0.1.0",
-  "suite_name": "custom",
+  "suite_name": "qplib-baseline-p0",
   "thread_sweep": [],
-  "timestamp": "2026-09-20T16:38:17",
+  "timestamp": "2026-09-21T11:25:48",
   "total": 6
 }

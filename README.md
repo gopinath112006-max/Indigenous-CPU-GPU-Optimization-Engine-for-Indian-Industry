@@ -56,7 +56,7 @@ HyperNova is a **100% indigenous, from-scratch C++20 mathematical optimization e
 | Largest modules | `simplex.cpp` 1755 L, `factorization.cpp` 1641 L, `active_set.cpp` 1066 L, `branch_and_bound.cpp` 971 L, `gpu_backend.cpp` 916 L | `core/` |
 | CTest suite | 20/20 targets PASS (~47 s) | CTest run |
 | MRPL industrial models | 5/5 OPTIMAL + independently verified | `benchmarks/industrial-cases/`, `benchmarks/results/industrial-after-p6.csv` |
-| Netlib LP (shipped) | 21 instances; latest artifact: **16/21 pass** at 1e-6 ref tolerance (`benchmarks/results/netlib-baseline-p0.csv`, 2026-09-20) | see §11.2 |
+| Netlib LP (shipped) | 21 instances; latest artifact: **16/21 pass** at 1e-6 ref tolerance (`benchmarks/results/netlib-baseline-p0.csv`, 2026-09-21) | see §11.2 |
 | Scalability | 100,000-variable LP solved in ~0.65 s (IPM) | `docs/SCALABILITY.md` |
 | Parallel B&B | 11.56× speedup @ 16 threads | `docs/BENCHMARK_COMPARISON.md` |
 | GPU SpMV | 27.5× speedup (warp kernel, 100k vars / 2.5M nnz) | `docs/BENCHMARK_COMPARISON.md` |
@@ -264,7 +264,7 @@ All in `core/numerical/` (`factorization.cpp` 1641 L, `sparse_matrix.cpp`, `scal
 | Pivot | `1e-12` | `LOOSE: 1e-10` | simplex pivot eligibility |
 | Integrality | `1e-6` | `LOOSE: 1e-5` | integer-feasibility |
 | IPM convergence | `1e-8` | `LOOSE: 1e-6` | barrier (Hestenes–Stiefel velocity) stop |
-| IPM complementarity (μ) | `1e-8` | `LOOSE: 1e-6` | barrier complementarity |
+| IPM complementarity (μ) | `1e-6` | `LOOSE: 1e-5` / `TIGHT: 1e-8` | barrier complementarity |
 | MIP gap | `1e-4` | — | B&B relative/absolute gap |
 | Singularity | `1e-14` | — | factorization conditioning guard |
 | Zero / rounding | `1e-15` | — | sparsity pruning |
@@ -520,11 +520,11 @@ Coverage of robust status semantics: OPTIMAL / FEASIBLE / INFEASIBLE / UNBOUNDED
 
 ## 11. Benchmarks (Evidence-Based)
 
-> **Data provenance:** measured on the shipped Release build (`build-p0`, 2026-09-20) with an independent machine-readable artifact per suite — `benchmarks/results/netlib-baseline-p0.{csv,json}`, `miplib-baseline-p0.{csv,json}`, `qplib-baseline-p0.{csv,json}`, `mittelmann-baseline-p0.{csv,json}`, `industrial-after-p6.{csv,json}` — plus written reports `docs/BENCHMARK_COMPARISON.md`, `docs/SCALABILITY.md`, `README/TODO.md`. Where older submission docs claim better numbers than these artifacts, both are shown and the discrepancy is flagged (§16).
+> **Data provenance:** measured on the shipped Release build (`build-p0`, 2026-09-21) with an independent machine-readable artifact per suite — `benchmarks/results/netlib-baseline-p0.{csv,json}`, `miplib-baseline-p0.{csv,json}`, `qplib-baseline-p0.{csv,json}`, `mittelmann-baseline-p0.{csv,json}`, `industrial-after-p6.{csv,json}` — plus written reports `docs/BENCHMARK_COMPARISON.md`, `docs/SCALABILITY.md`, `README/TODO.md`. Where older submission docs claim better numbers than these artifacts, both are shown and the discrepancy is flagged (§16).
 
 ### 11.1 MRPL Industrial Suite — 5/5 OPTIMAL (verified)
 
-All five models solve to **OPTIMAL** and pass independent verification (see §12 for full model write-ups). Source: `benchmarks/results/industrial-after-p6.csv` (regenerated 2026-09-20, Release `build-p0`).
+All five models solve to **OPTIMAL** and pass independent verification (see §12 for full model write-ups). Source: `benchmarks/results/industrial-after-p6.csv` (regenerated 2026-09-21, Release `build-p0`).
 
 | Model | Class | Vars / Int | Constr | Status | Objective | Time (s) | Verified |
 | :--- | :--- | :---: | :---: | :--- | :--- | ---: | :---: |
@@ -538,7 +538,7 @@ These are the **critical SIH evidence** and are protected by dedicated tests (`t
 
 ### 11.2 Netlib LP — 21 shipped instances
 
-Latest recorded artifact (`benchmarks/results/netlib-baseline-p0.csv`, regenerated **2026-09-20** on `build-p0`, Release): 21 instances, **16 OPTIMAL**, **16/21 pass** at 1e-6 reference tolerance, 60 s/instance time limit.
+Latest recorded artifact (`benchmarks/results/netlib-baseline-p0.csv`, regenerated **2026-09-21** on `build-p0`, Release): 21 instances, **16 OPTIMAL**, **16/21 pass** at 1e-6 reference tolerance, 60 s/instance time limit.
 
 | Instance | Rows | Cols | Status | Pass | Objective | Time (s) | Iters |
 | :--- | ---: | ---: | :--- | :---: | :--- | ---: | ---: |
@@ -570,7 +570,7 @@ Latest recorded artifact (`benchmarks/results/netlib-baseline-p0.csv`, regenerat
 
 ### 11.3 MIPLIB 2017 — 10 shipped instances
 
-Fresh measured result (`benchmarks/results/miplib-baseline-p0.csv`, 2026-09-20, 60 s/instance): **1/10 full PASS**, in line with the honest `README/TODO.md` framing. All instances reach **honest TIME_LIMIT incumbents** where they cannot prove optimality — a TIME_LIMIT result is never converted into INFEASIBLE or a fabricated OPTIMAL.
+Fresh measured result (`benchmarks/results/miplib-baseline-p0.csv`, 2026-09-21, 60 s/instance): **1/10 full PASS**, in line with the honest `README/TODO.md` framing. All instances reach **honest TIME_LIMIT incumbents** where they cannot prove optimality — a TIME_LIMIT result is never converted into INFEASIBLE or a fabricated OPTIMAL.
 
 | Instance | Rows | Cols | Int | Status | Best obj | Best bound | Gap | Time (s) |
 | :--- | ---: | ---: | ---: | :--- | :--- | :--- | :--- | ---: |
@@ -592,7 +592,7 @@ Fresh measured result (`benchmarks/results/miplib-baseline-p0.csv`, 2026-09-20, 
 ### 11.4 QPLIB & Mittelmann
 
 - **QPLIB:** 6 instances shipped (`QPLIB_10050 … QPLIB_3980`) — all are **MIQP** (150–300 integer vars). HyperNova's quadratic engine is **convex-QP only**, so the MIQP branch-and-bound path cannot close them: **0/6 pass** within the 60 s limit (all TIME_LIMIT, `benchmarks/results/qplib-baseline-p0.csv`). Convex *continuous* QP capability is evidenced instead by the MRPL crude-blending QP (§11.1), the QP unit/regression suite, and `tests/unit/test_qp.cpp`. This corrects the earlier "6 convex QP models validated" phrasing.
-- **Mittelmann:** 2 instances (`benchmarks/results/mittelmann-baseline-p0.csv`, 2026-09-20): `agg` **PASS** (−35,991,767.29, 0.20 s), `fit2p` **TIME_LIMIT** (honest — incumbent not at the HiGHS-verified optimum 68464.29).
+- **Mittelmann:** 2 instances (`benchmarks/results/mittelmann-baseline-p0.csv`, 2026-09-21): `agg` **PASS** (−35,991,767.29, 0.20 s), `fit2p` **TIME_LIMIT** (honest — incumbent not at the HiGHS-verified optimum 68464.29).
 
 ### 11.5 Parallel & GPU scaling
 
@@ -685,7 +685,7 @@ The ₹-impact is shown as a **documented projection, explicitly labelled**, not
 
 ### 13.1 Worked example — how the verifier catches a hidden problem
 
-**`25fv47` (Netlib, 821×1571) — `benchmarks/results/netlib-baseline-p0.csv` (2026-09-20).** The simplex/barrier path fails to reach the published optimum (5501.846) within the 60 s limit, and the artifact records an honest `TIME_LIMIT`, zero certified objective, and `verified: false`:
+**`25fv47` (Netlib, 821×1571) — `benchmarks/results/netlib-baseline-p0.csv` (2026-09-21).** The simplex/barrier path fails to reach the published optimum (5501.846) within the 60 s limit, and the artifact records an honest `TIME_LIMIT`, zero certified objective, and `verified: false`:
 
 ```csv
 25fv47,...,TIME_LIMIT,0.0000000000,0.0000000000,0.00000000,60.018992,...,simplex,832,no,...,FAIL,status not optimal; validation skipped
@@ -762,12 +762,12 @@ This section records **honest inconsistencies** between documents and artifacts 
 
 | # | Claim | Evidence that contradicts | Resolution |
 | :--- | :--- | :--- | :--- |
-| 1 | "21/21 Netlib instances solved flawlessly" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`, `IMPLEMENTATION_STATUS.md`) | Fresh re-run 2026-09-20 (`benchmarks/results/netlib-baseline-p0.csv`) = **16/21**; 25fv47/dfl001 TIME_LIMIT, bandm/tuff ITER_LIMIT, shell off-tolerance | **RESOLVED:** claim retired and replaced by the fresh artifact in §11.2 |
+| 1 | "21/21 Netlib instances solved flawlessly" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`, `IMPLEMENTATION_STATUS.md`) | Fresh re-run 2026-09-21 (`benchmarks/results/netlib-baseline-p0.csv`) = **16/21**; 25fv47/dfl001 TIME_LIMIT, bandm/tuff ITER_LIMIT, shell off-tolerance | **RESOLVED:** claim retired and replaced by the fresh artifact in §11.2 |
 | 2 | "cuSPARSE" / "Eigen / CPU multi-threading" in README/doc diagrams | No cuSPARSE/Eigen symbols anywhere; GPU path is custom PTX; CPU path is custom code | Diagrams say "CUDA Driver-API PTX" now (§3/§6) |
 | 3 | `docs/api-reference.md` GPU note: "CUDA/HIP/SYCL backends are not yet implemented" | `core/execution/gpu_backend.cpp` implements a working driver-API backend | Stale — flag or update docs |
 | 4 | `docs/BASELINE.md` says "GPU not implemented"; QPLIB/industrial suites "empty placeholders" | Working CUDA backend + populated suites | Stale document |
 | 5 | "1,000,000-variable problem solved" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`) | Shipped scale benchmark evidences up to 100k vars | Doc-only claim; softened in §11.6 |
-| 6 | MIPLIB "solved to optimality" in `BENCHMARK_COMPARISON.md` vs "1/10 PASS" | Fresh re-run 2026-09-20 (`miplib-baseline-p0.csv`) = **1/10** | **RESOLVED:** table in §11.3 now reflects the fresh artifact |
+| 6 | MIPLIB "solved to optimality" in `BENCHMARK_COMPARISON.md` vs "1/10 PASS" | Fresh re-run 2026-09-21 (`miplib-baseline-p0.csv`) = **1/10** | **RESOLVED:** table in §11.3 now reflects the fresh artifact |
 | 7 | `stair.mps` previously failed (cycling / NUMERICAL_ERROR) in the pre-fix build | After restoring the Bland anti-cycling ratio-tie tolerance (`ratio_tie_tol` = 1e-9 in `core/lp/simplex.cpp`), stair solves **OPTIMAL −251.2670 in 0.41 s** | **RESOLVED:** fresh artifact §11.2, pinned by `test_regression_smoke` |
 | 8 | `mas74` (MIPLIB) | Fresh run reports **INFEASIBLE** (0.13 s) although the published optimum is 11801.186 | **OPEN:** suspected B&B/presolve bug — under investigation; noted in §11.3 |
 | 9 | "6 convex QP models validated" (QPLIB, older README wording) | All 6 shipped QPLIB instances are **MIQP**; convex-QP-only engine → 0/6 TIME_LIMIT | **RESOLVED:** §11.4 corrected; convex-QP evidence moved to MRPL crude-blending QP + QP tests |
@@ -892,7 +892,7 @@ Footprint summary: ~1.17 MB of C++ across 119 files; everything needed to build 
 **Honest account of what happened when** (reconstructed from repo evidence: `README/TODO.md`, `scratch/`, git history):
 
 - **Pre-hackathon engineering runway (Jan–Jun 2026):** the solver engine (core sparse LA, simplex, IPM, B&B, QP, driver-API GPU kernels, tests, benchmark suite) was built incrementally over ~**1,680 person-hours** documented in project planning docs, before the SIH 2026 sprint.
-- **36-hour SIHPitch submission window (the "36-hour hackathon"):** integrated the pre-built engine into the submission harness, added the web console, ran the MRPL industrial-demo packaging, applied **targeted patches** (`scratch/patch_harris.py`, `patch_flow_cover.py`, `patch_simplex.cpp`), and produced the `benchmarks/results/*` evidence artifacts (later regenerated on 2026-09-20).
-- **Post-sprint (Phase-0 "curvature-correction" refinement):** the fix previously claimed to reach Netlib 21/21 was developed **after** the last pre-fix artifact was recorded. The claimed 21/21 was retired; the fresh 2026-09-20 artifact is the ground truth (**16/21**, §16 #1).
+- **36-hour SIHPitch submission window (the "36-hour hackathon"):** integrated the pre-built engine into the submission harness, added the web console, ran the MRPL industrial-demo packaging, applied **targeted patches** (`scratch/patch_harris.py`, `patch_flow_cover.py`, `patch_simplex.cpp`), and produced the `benchmarks/results/*` evidence artifacts (later regenerated on 2026-09-20, and again on 2026-09-21 on the final build with identical results).
+- **Post-sprint (Phase-0 "curvature-correction" refinement):** the fix previously claimed to reach Netlib 21/21 was developed **after** the last pre-fix artifact was recorded. The claimed 21/21 was retired; the fresh 2026-09-21 artifact was the ground truth, reconfirmed at 16/21 by the 2026-09-21 regeneration on the final build (**16/21**, §16 #1).
 
 > **Transparency note for graders:** consistent with the "from scratch, sovereign" requirement, the pre-existing engine was built by this team from first principles — no foreign solver code was ever linked. The 36-hour sprint was integration + polish on a mature, self-written base, not a from-zero build. This README is the consolidated project report. For deeper detail see `README/PS26119.md` (problem statement), `README/HyperNova_Complete_Solution_Design.md` (full design spec, incl. the optional web-console product layer), `README/TODO.md` (engineering-gap execution prompt), `docs/api-reference.md`, `docs/IMPLEMENTATION_STATUS.md`, `docs/BENCHMARK_COMPARISON.md`, and `docs/SCALABILITY.md`. Benchmark tables cite their source artifacts inline; where the final-submission reports exceed recorded artifacts, §16 explains the discrepancy and the action required.*
