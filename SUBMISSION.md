@@ -2,7 +2,7 @@
 
 **Problem Statement:** 26119 (Theme: Smart Automation)
 **Repository:** https://github.com/gopinath112006-max/Indigenous-CPU-GPU-Optimization-Engine-for-Indian-Industry
-**Commit at packaging time:** `d347400` (branch `main`)
+**Commit at packaging time:** `9edd9b5` (branch `main`)
 
 > **One-line pitch (≤200 chars):**
 > Indigenous GPU-accelerated LP/MILP/QP solver. 100% self-written C++20. Tested on 5 MRPL industrial cases. ₹82 Cr annual benefit. Zero solver licensing cost.
