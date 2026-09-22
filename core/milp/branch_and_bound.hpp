@@ -47,7 +47,11 @@ struct BranchingOptions {
 };
 
 struct CutOptions {
-    bool gomory_cuts = true;
+    // gomory_cuts defaults to false: the previous single-variable "Gomory"
+    // separation was an invalid pseudo-cut (fabricated from constraint
+    // coefficients, not the LP tableau) that could cut off feasible integer
+    // points and produced false-OPTIMAL certificates (see MIPLIB mas74).
+    bool gomory_cuts = false;
     bool mir_cuts = true;
     bool knapsack_cuts = false;
     bool clique_cuts = false;

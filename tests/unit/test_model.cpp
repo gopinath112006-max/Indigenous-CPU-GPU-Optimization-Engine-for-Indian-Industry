@@ -157,6 +157,88 @@ ENDATA
     EXPECT_TRUE(result.problem.is_milp());
 }
 
+TEST(MPSParserTest, RightJustifiedLongValueTokenLines) {
+    // MIPLIB-style writers (e.g. mas74/mas76) right-justify 12+ character
+    // numeric fields into the trailing edge of the field window. A strict
+    // fixed-offset slice previously truncated the leading digit, turning
+    // '5026.3323601' into '026.3323601' and corrupting the models. The
+    // whitespace-token shape (<name> [<name>] <value> [<name>] <value>) must
+    // be preferred and keep the full value.
+    std::string mps_content = R"(
+NAME          LONGVAL
+ROWS
+ N  OBJ
+ G  C2
+COLUMNS
+    X1        OBJ        1.0       C2        5026.3323601
+RHS
+    RHS1      C2        10000.0
+ENDATA
+)";
+
+    MPSParser parser;
+    parser.set_free_format(false);
+    auto result = parser.parse_string(mps_content);
+
+    ASSERT_TRUE(result.success);
+    ASSERT_EQ(result.problem.constraints.size(), 1u);
+    const auto& con = result.problem.constraints[0];
+    ASSERT_EQ(con.name, "C2");
+    bool found = false;
+    for (std::size_t k = result.problem.constraint_matrix.row_ptr()[con.index];
+         k < result.problem.constraint_matrix.row_ptr()[con.index + 1]; ++k) {
+        std::size_t j = result.problem.constraint_matrix.col_indices()[k];
+        if (result.problem.variables[j].name == "X1") {
+            EXPECT_NEAR(result.problem.constraint_matrix.values()[k], 5026.3323601, 1e-6)
+                << "leading digits of right-justified long values must be preserved";
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(MPSParserTest, NetlibStyleRHSValueAtColumn50KeepsSign) {
+    // Netlib fixed-format RHS records place the second numeric field so that a
+    // 12-char right-justified value starts at column 50 (zero-based offset 49).
+    // The previous fixed window field(50,12) started one column late and
+    // dropped the leading sign, e.g. dfl001's '-.3333333333' was parsed as
+    // '+.3333333333'. This line has 4 tokens, so it exercises the fixed-offset
+    // fallback (not the token fast path).
+    // Layout: 14 spaces | ROWA cols 15-22 | '         1.' cols 25-36 |
+    //         3 spaces | ROWB cols 40-47 | '-.3333333333' cols 50-61.
+    const std::string rhs_line =
+        std::string(14, ' ') + "ROWA" + std::string(16, ' ') + "1." +
+        std::string(3, ' ') + "ROWB" + std::string(6, ' ') + "-.3333333333";
+    std::string mps_content = R"(
+NAME          NETLIBSIGN
+ROWS
+ N  OBJ
+ G  ROWA
+ G  ROWB
+COLUMNS
+    X1        OBJ        1.0
+    X1        ROWA       1.0
+    X1        ROWB       1.0
+RHS
+)" + rhs_line + R"(
+ENDATA
+)";
+
+    MPSParser parser;
+    parser.set_free_format(false);
+    auto result = parser.parse_string(mps_content);
+
+    ASSERT_TRUE(result.success);
+    double rhsA = 0.0, rhsB = 0.0;
+    for (const auto& con : result.problem.constraints) {
+        if (con.name == "ROWA") rhsA = con.rhs;
+        if (con.name == "ROWB") rhsB = con.rhs;
+    }
+    EXPECT_NEAR(rhsA, 1.0, 1e-9);
+    EXPECT_NEAR(rhsB, -0.3333333333, 1e-9)
+        << "sign at column 50 of a right-justified 12-char value must be preserved";
+}
+
 TEST(MPSParserTest, QPWithQuadraticObjective) {
     std::string mps_content = R"(
 NAME          QP_TEST

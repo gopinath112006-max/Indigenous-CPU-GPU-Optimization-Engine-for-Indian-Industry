@@ -540,17 +540,50 @@ MPSParser::parse_fixed_format_line(const std::string& line) {
         return line.substr(offset, std::min(width, line.size() - offset));
     };
 
-    std::string name1 = field(4, 8);
-    std::string name2 = field(14, 8);
-    std::string val1_str = field(24, 12);
-    std::string name3 = field(39, 8);
-    std::string val2_str = field(50, 12);
-
     auto trim = [](std::string s) {
         s.erase(0, s.find_first_not_of(" \t"));
         s.erase(s.find_last_not_of(" \t") + 1);
         return s;
     };
+
+    auto is_numeric = [](const std::string& s) {
+        if (s.empty()) return false;
+        std::size_t consumed = 0;
+        try { (void)std::stod(s, &consumed); } catch (...) { return false; }
+        return consumed == s.size();
+    };
+
+    // Right-justified fixed-format writers (e.g. the official MIPLIB archives)
+    // align each numeric field to the trailing edge of its fixed column window.
+    // A value that is 12+ characters long then spills left of the nominal field
+    // start. The strict fixed-offset slice (below) would truncate the leading
+    // digit or sign of such a value, so prefer a whitespace-token interpretation
+    // whenever the line matches the required shape:
+    //     <name> [<name>] <value> [<name>] <value>
+    // with genuinely numeric value fields. Blank-field writers (e.g. Netlib,
+    // which omits the RHS vector name) fall through to the fixed offsets.
+    std::istringstream iss(line);
+    std::vector<std::string> tok;
+    { std::string t; while (iss >> t) tok.push_back(t); }
+
+    if (tok.size() == 3 && !is_numeric(tok[0]) && !is_numeric(tok[1]) &&
+        is_numeric(tok[2])) {
+        return std::make_tuple(tok[0], tok[1], std::stod(tok[2]), std::string(), 0.0);
+    }
+    if (tok.size() == 5 && !is_numeric(tok[0]) && !is_numeric(tok[1]) &&
+        is_numeric(tok[2]) && !is_numeric(tok[3]) && is_numeric(tok[4])) {
+        return std::make_tuple(tok[0], tok[1], std::stod(tok[2]), tok[3], std::stod(tok[4]));
+    }
+
+    // Fixed-offset windows (MPS fixed format). Field 5 occupies columns 50-61
+    // (zero-based offsets 49-60); this previously read field(50,12), which
+    // dropped the leading character or sign of right-justified 12+ character
+    // values.
+    std::string name1 = field(4, 8);
+    std::string name2 = field(14, 8);
+    std::string val1_str = field(24, 12);
+    std::string name3 = field(39, 8);
+    std::string val2_str = field(49, 12);
 
     name1 = trim(name1);
     name2 = trim(name2);

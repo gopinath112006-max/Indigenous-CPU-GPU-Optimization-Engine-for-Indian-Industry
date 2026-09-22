@@ -21,47 +21,30 @@ std::vector<Cut> CutGenerator::generate_gomory_cuts(const model::Problem& proble
     return cuts;
 }
 
-std::vector<Cut> CutGenerator::generate_gomory_from_row(const model::Problem& problem,
-                                                         const std::vector<double>& lp_solution,
-                                                         std::size_t row_idx) {
-    std::vector<Cut> cuts;
-    const auto& A = problem.constraint_matrix;
-    // const auto& con = problem.constraints[row_idx];
-
-    // if (con.sense != model::ConstraintSense::EQ) return cuts;
-
-    std::vector<double> row_coeffs(problem.variables.size(), 0.0);
-    if (A.order() == model::StorageOrder::CSR) {
-        for (std::size_t k = A.row_ptr()[row_idx]; k < A.row_ptr()[row_idx + 1]; ++k) {
-            std::size_t j = A.col_indices()[k];
-            row_coeffs[j] = A.values()[k];
-        }
-    }
-
-    for (std::size_t j = 0; j < problem.variables.size(); ++j) {
-        if (problem.variables[j].type != model::VarType::CONTINUOUS) {
-            double val = lp_solution[j];
-            double f = val - std::floor(val);
-            if (f > tol_.feasibility_tol() && f < 1.0 - tol_.feasibility_tol()) {
-                double coeff_f = row_coeffs[j] - std::floor(row_coeffs[j]);
-                if (std::abs(coeff_f) > tol_.feasibility_tol()) {
-                    Cut cut;
-                    double c = -coeff_f;
-                    cut.coefficients.push_back({j, c});
-                    cut.sense = model::ConstraintSense::LE;
-                    cut.rhs = -f;
-                    cut.name = "gomory_" + std::to_string(next_cut_id_++);
-                    // Efficacy = LP violation. On an EQ row used at equality,
-                    // the cut replaces the fractional variable with its rounded
-                    // value, so activity(x*) is matched against the rounded RHS.
-                    cut.efficacy = std::max(0.0, c * val - cut.rhs);
-                    cuts.push_back(cut);
-                }
-            }
-        }
-    }
-
-    return cuts;
+std::vector<Cut> CutGenerator::generate_gomory_from_row(const model::Problem& /*problem*/,
+                                                         const std::vector<double>& /*lp_solution*/,
+                                                         std::size_t /*row_idx*/) {
+    // A genuine Gomory mixed-integer cut is derived from a FRACTIONAL simplex
+    // row of the optimal LP tableau (x_j = xbar_j + sum_i \bar a_ij x'_i with
+    // fractional xbar_j), NOT from the original constraint coefficients.
+    //
+    // The previous implementation fabricated a single-variable cut
+    //     -f_j x_j <= -frac(x*_j)   i.e.   x_j >= frac(x*_j) / f_j
+    // directly from the constraint matrix, where f_j = a_ij - floor(a_ij).
+    // That object is NOT a valid cut: it excludes integer points below that
+    // ratio that satisfy the row, and on rows with fractional coefficients it
+    // can force a binary variable above 1 and render a feasible relaxation
+    // INFEASIBLE. Verified on the MIPLIB instance mas74: applying these cuts
+    // at the root made the feasible LP infeasible, the root node was pruned as
+    // "infeasible", and the heuristic incumbent was reported as a false
+    // OPTIMAL certificate.
+    //
+    // Without access to the optimal tableau (basis) the correct, valid rounding
+    // cuts are the MIR generator (all-integer rows) and the knapsack/flow-cover
+    // generators (binary rows), all of which are gated to their validity
+    // domains. Gomory separation is therefore disabled: gomory_cuts defaults to
+    // false and the api BRANCH_AND_CUT preset no longer re-enables it.
+    return {};
 }
 
 std::vector<Cut> CutGenerator::generate_mir_cuts(const model::Problem& problem,

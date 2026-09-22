@@ -125,7 +125,14 @@ struct ParallelContext {
         up_child.depth = parent.depth + 1;
         up_child.bounds = parent.bounds;
         up_child.bounds.push_back({static_cast<std::size_t>(var), ceil_val, true});
-        up_child.lower_bound = ceil_val;
+        // Children are queued unsolved; stamp them with the parent's SOLVED
+        // relaxation bound (still valid for every tighter subproblem), not the
+        // bare ceil_val of the branched variable, which leaked a bogus finite
+        // "bound" into the frontier and corrupted compute_best_bound()/gap.
+        if (std::isfinite(parent.lower_bound)) {
+            down_child.lower_bound = parent.lower_bound;
+            up_child.lower_bound = parent.lower_bound;
+        }
 
         std::vector<std::size_t> child_indices;
         child_indices.reserve(2);

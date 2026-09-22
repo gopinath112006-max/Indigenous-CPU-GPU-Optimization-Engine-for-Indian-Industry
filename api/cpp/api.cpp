@@ -276,10 +276,13 @@ lp::SimplexOptions simplex_opts = pimpl_->make_simplex_options(dispatch_budget);
             bb_opts.heuristics.rins = pimpl_->options.heuristic_rins;
             bb_opts.heuristics.rins_frequency = pimpl_->options.rins_frequency;
             if (pimpl_->options.engine == EngineType::BRANCH_AND_CUT) {
-                bb_opts.cuts.gomory_cuts = true;
                 bb_opts.cuts.mir_cuts = true;
                 bb_opts.cuts.knapsack_cuts = true;
+                // gomory_cuts intentionally left at its default (false): the
+                // old single-variable Gomory separation was invalid and could
+                // cut off feasible integer points (see MIPLIB mas74).
                 bb_opts.cuts.clique_cuts = true;
+                bb_opts.cuts.flow_cover_cuts = true;
             }
             milp::BranchAndBoundSolver bb_solver(pimpl_->options.tolerances, bb_opts);
             auto result = bb_solver.solve(target);

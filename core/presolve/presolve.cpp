@@ -375,9 +375,9 @@ void Presolver::apply_coefficient_strengthening(model::Problem& prob) const {
             if (std::abs(rhs_div - rounded) > int_tol) continue;
             new_rhs = rounded;
         } else if (prob.constraints[i].sense == model::ConstraintSense::LE) {
-            new_rhs = std::floor(rhs_div);
+            new_rhs = std::floor(rhs_div + int_tol);
         } else {  // GE
-            new_rhs = std::ceil(rhs_div);
+            new_rhs = std::ceil(rhs_div - int_tol);
         }
 
         for (std::size_t k = start; k < end; ++k) {

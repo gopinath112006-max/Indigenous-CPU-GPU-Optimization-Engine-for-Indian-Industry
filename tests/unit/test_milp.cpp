@@ -78,6 +78,25 @@ TEST(CuttingPlanesTest, GomoryCuts) {
     EXPECT_GE(cuts.size(), 0);
 }
 
+TEST(CuttingPlanesTest, GomorySeparationDiscontinued) {
+    // The old single-variable "Gomory" separation was fabricated from the
+    // constraint coefficients (no LP tableau) and could cut off feasible
+    // integer points, e.g. forcing a binary above 1 on a fractional-
+    // coefficient row (see BranchAndBoundTest.FractionalCoefficientRowKeepsTrueOptimum
+    // below). It must now emit no cuts even on fractional-coefficient rows.
+    ProblemBuilder builder("test");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x0");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x1");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x2");
+    builder.add_constraint({{0, 0.5}, {1, 0.6}, {2, 0.7}}, ConstraintSense::LE, 1.1, "c1");
+    Problem prob = builder.build();
+
+    CutGenerator generator;
+    std::vector<double> lp_sol = {0.0, 2.0 / 3.0, 1.0};
+    auto cuts = generator.generate_gomory_cuts(prob, lp_sol);
+    EXPECT_TRUE(cuts.empty());
+}
+
 TEST(HeuristicsTest, Rounding) {
     ProblemBuilder builder("test");
     builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
@@ -550,6 +569,40 @@ TEST(BranchAndBoundTest, InfeasibleDetectionMatchesBruteForce) {
     EXPECT_FALSE(bf.feasible);
     EXPECT_TRUE(result.status == ProblemStatus::INFEASIBLE ||
                 result.status == ProblemStatus::UNKNOWN);
+}
+
+TEST(BranchAndBoundTest, FractionalCoefficientRowKeepsTrueOptimum) {
+    // Regression: the old single-variable "Gomory" separation turned a feasible
+    // LP into an infeasible one on fractional-coefficient rows, pruned the root
+    // node as "infeasible" and reported whatever heuristic incumbent as a false
+    // OPTIMAL certificate (observed on MIPLIB mas74). Here the root LP optimum
+    // is 6 with x1 fractional (LP x = (0, 2/3, 1)); the bogus cut forced x1 >=
+    // 1.111, making the LP infeasible. The true integer optimum is 5.
+    ProblemBuilder builder("gomory_regression");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x0");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x1");
+    builder.add_variable(0.0, 1.0, VarType::BINARY, "x2");
+    builder.add_constraint({{0, 0.5}, {1, 0.6}, {2, 0.7}}, ConstraintSense::LE, 1.1, "c1");
+    builder.set_objective({{0, 2.0}, {1, 3.0}, {2, 4.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    // Explicitly request Gomory separation: the (now disbanded) generator must
+    // never degrade the certificate. Heuristics are off so the outcome can only
+    // come from legitimate LP relaxations and branching.
+    BranchAndBoundOptions opts;
+    opts.cuts.gomory_cuts = true;
+    opts.heuristics.rounding = false;
+    opts.heuristics.diving = false;
+    opts.heuristics.feasibility_pump = false;
+    opts.heuristics.rins = false;
+    opts.threads = 1;
+    BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
+    auto result = solver.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL)
+        << "fractional-coefficient cuts must not falsify the certificate";
+    EXPECT_NEAR(result.objective_value, 5.0, 1e-4)
+        << "fractional-coefficient cuts must not cut off the integer optimum";
 }
 
 TEST(BranchAndBoundTest, NodeSelectionStrategiesAffectExecution) {
