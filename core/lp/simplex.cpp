@@ -1297,9 +1297,11 @@ std::vector<std::size_t> SimplexSolver::ranked_candidates(bool maximize) const {
         ranked.push_back({j, score});
     }
     std::stable_sort(ranked.begin(), ranked.end(),
-        [&](const Ranked& a, const Ranked& b) {
+        [](const Ranked& a, const Ranked& b) {
             if (a.score != b.score) return a.score > b.score;
-            return options_.bland_rule ? a.j < b.j : true;
+            // Deterministic index tie-break (Bland-style) in all configurations;
+            // a comparator that is not a strict weak ordering is UB in sort.
+            return a.j < b.j;
         });
     for (const auto& r : ranked) cands.push_back(r.j);
     return cands;
@@ -1516,7 +1518,7 @@ void SimplexSolver::update_basis_factorization(int /*leaving*/, int /*entering*/
     // Flat refactor frequency keeps eta chains short (numerically clean for
     // degenerate phase-1 instances); the sparse LU refresh is cheap enough
     // that the periodic rebuild dominates no run.
-    refactor_frequency_ = 25;
+    refactor_frequency_ = 10;
     const bool eta_ok = basis_factorization_ && ld >= 0 && !pivot_direction_.empty() &&
                         iters_since_refactor_ < refactor_frequency_ &&
                         basis_factorization_->apply_eta(ld, pivot_direction_);
@@ -1549,6 +1551,11 @@ if (eta_ok) {
         last_entering_ = -1;
     }
     if (!basis_factorization_) return;
+
+    if (basis_factorization_->stats().singular) {
+        std::cerr << "BASIS SINGULAR rank=" << basis_factorization_->stats().rank
+                  << " n=" << ncons << "\n";
+    }
 
     std::vector<double> b(ncons);
     for (std::size_t i = 0; i < ncons; ++i) {

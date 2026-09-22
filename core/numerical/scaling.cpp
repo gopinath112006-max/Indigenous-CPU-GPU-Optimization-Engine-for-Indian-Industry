@@ -6,6 +6,43 @@
 
 namespace hypernova::numerical {
 
+namespace {
+
+// Row and column maxima of the *effectively scaled* matrix |R*A*C|} under the
+// current accumulated row/column scales. A Ruiz-style pass must measure the
+// current iteration's working matrix; recomputing maxima from the raw A every
+// pass multiplies the same factor into the accumulated scales forever and
+// never converges to a fixed point.
+void effective_maxima(const SparseMatrix& A,
+                      const std::vector<double>& row_scales,
+                      const std::vector<double>& col_scales,
+                      std::vector<double>& row_max,
+                      std::vector<double>& col_max) {
+    std::fill(row_max.begin(), row_max.end(), 0.0);
+    std::fill(col_max.begin(), col_max.end(), 0.0);
+    if (A.order() == StorageOrder::CSR) {
+        for (std::size_t i = 0; i < A.rows(); ++i) {
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                const std::size_t j = A.col_indices()[k];
+                const double val = std::abs(A.values()[k]) * row_scales[i] * col_scales[j];
+                if (val > row_max[i]) row_max[i] = val;
+                if (val > col_max[j]) col_max[j] = val;
+            }
+        }
+    } else {
+        for (std::size_t j = 0; j < A.cols(); ++j) {
+            for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
+                const std::size_t i = A.col_indices()[k];
+                const double val = std::abs(A.values()[k]) * row_scales[i] * col_scales[j];
+                if (val > row_max[i]) row_max[i] = val;
+                if (val > col_max[j]) col_max[j] = val;
+            }
+        }
+    }
+}
+
+} // namespace
+
 ScalingResult MatrixScaler::compute_scales(const SparseMatrix& A,
                                             const std::vector<double>& /*row_bounds*/,
                                             const std::vector<double>& /*col_bounds*/) {
@@ -96,39 +133,24 @@ ScalingResult geometric_scaling_impl(const SparseMatrix& A, int max_iter) {
     std::vector<double> col_max(A.cols(), 0.0);
 
     for (int iter = 0; iter < max_iter; ++iter) {
-        std::fill(row_max.begin(), row_max.end(), 0.0);
-        std::fill(col_max.begin(), col_max.end(), 0.0);
-
-        if (A.order() == StorageOrder::CSR) {
-            for (std::size_t i = 0; i < A.rows(); ++i) {
-                for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
-                    double val = std::abs(A.values()[j]);
-                    row_max[i] = std::max(row_max[i], val);
-                    col_max[A.col_indices()[j]] = std::max(col_max[A.col_indices()[j]], val);
-                }
-            }
-        } else {
-            for (std::size_t j = 0; j < A.cols(); ++j) {
-                for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
-                    double val = std::abs(A.values()[k]);
-                    col_max[j] = std::max(col_max[j], val);
-                    row_max[A.col_indices()[k]] = std::max(row_max[A.col_indices()[k]], val);
-                }
-            }
-        }
-
         bool changed = false;
+
+        // Row phase: measure after the current scales, then re-measure for the
+        // column phase so each pass works on the freshly scaled matrix
+        // (Gauss-Seidel style) -- simultaneous row/col scaling from one stale
+        // snapshot oscillates and never converges.
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t i = 0; i < A.rows(); ++i) {
-            if (row_max[i] > 0.0) {
-                double scale = 1.0 / std::sqrt(row_max[i]);
-                result.row_scales[i] *= scale;
+            if (row_max[i] > 0.0 && std::abs(row_max[i] - 1.0) > 1e-4) {
+                result.row_scales[i] *= 1.0 / std::sqrt(row_max[i]);
                 changed = true;
             }
         }
+
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t j = 0; j < A.cols(); ++j) {
-            if (col_max[j] > 0.0) {
-                double scale = 1.0 / std::sqrt(col_max[j]);
-                result.col_scales[j] *= scale;
+            if (col_max[j] > 0.0 && std::abs(col_max[j] - 1.0) > 1e-4) {
+                result.col_scales[j] *= 1.0 / std::sqrt(col_max[j]);
                 changed = true;
             }
         }
@@ -153,27 +175,13 @@ ScalingResult curtis_reid_scaling_impl(const SparseMatrix& A, int max_iter) {
     result.row_scales.assign(A.rows(), 1.0);
     result.col_scales.assign(A.cols(), 1.0);
 
+    std::vector<double> row_max(A.rows(), 0.0);
+    std::vector<double> col_max(A.cols(), 0.0);
+
     for (int iter = 0; iter < max_iter; ++iter) {
         bool changed = false;
-        
-        std::vector<double> row_max(A.rows(), 0.0);
-        if (A.order() == StorageOrder::CSR) {
-            for (std::size_t i = 0; i < A.rows(); ++i) {
-                for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
-                    double val = std::abs(A.values()[j]) * result.row_scales[i] * result.col_scales[A.col_indices()[j]];
-                    row_max[i] = std::max(row_max[i], val);
-                }
-            }
-        } else {
-            for (std::size_t j = 0; j < A.cols(); ++j) {
-                for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
-                    std::size_t i = A.col_indices()[k];
-                    double val = std::abs(A.values()[k]) * result.row_scales[i] * result.col_scales[j];
-                    row_max[i] = std::max(row_max[i], val);
-                }
-            }
-        }
 
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t i = 0; i < A.rows(); ++i) {
             if (row_max[i] > 0.0 && std::abs(row_max[i] - 1.0) > 1e-4) {
                 result.row_scales[i] *= 1.0 / std::sqrt(row_max[i]);
@@ -181,24 +189,7 @@ ScalingResult curtis_reid_scaling_impl(const SparseMatrix& A, int max_iter) {
             }
         }
 
-        std::vector<double> col_max(A.cols(), 0.0);
-        if (A.order() == StorageOrder::CSR) {
-            for (std::size_t i = 0; i < A.rows(); ++i) {
-                for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
-                    double val = std::abs(A.values()[j]) * result.row_scales[i] * result.col_scales[A.col_indices()[j]];
-                    col_max[A.col_indices()[j]] = std::max(col_max[A.col_indices()[j]], val);
-                }
-            }
-        } else {
-            for (std::size_t j = 0; j < A.cols(); ++j) {
-                for (std::size_t k = A.row_ptr()[j]; k < A.row_ptr()[j + 1]; ++k) {
-                    std::size_t i = A.col_indices()[k];
-                    double val = std::abs(A.values()[k]) * result.row_scales[i] * result.col_scales[j];
-                    col_max[j] = std::max(col_max[j], val);
-                }
-            }
-        }
-
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t j = 0; j < A.cols(); ++j) {
             if (col_max[j] > 0.0 && std::abs(col_max[j] - 1.0) > 1e-4) {
                 result.col_scales[j] *= 1.0 / std::sqrt(col_max[j]);
@@ -226,35 +217,27 @@ ScalingResult equilibration_scaling_impl(const SparseMatrix& A, int max_iter) {
     result.row_scales.assign(A.rows(), 1.0);
     result.col_scales.assign(A.cols(), 1.0);
 
+    std::vector<double> row_max(A.rows(), 0.0);
+    std::vector<double> col_max(A.cols(), 0.0);
+
     for (int iter = 0; iter < max_iter; ++iter) {
-        std::vector<double> row_max(A.rows(), 0.0);
-        std::vector<double> col_max(A.cols(), 0.0);
-
-        if (A.order() == StorageOrder::CSR) {
-            for (std::size_t i = 0; i < A.rows(); ++i) {
-                for (std::size_t j = A.row_ptr()[i]; j < A.row_ptr()[i + 1]; ++j) {
-                    double val = std::abs(A.values()[j]);
-                    row_max[i] = std::max(row_max[i], val);
-                    col_max[A.col_indices()[j]] = std::max(col_max[A.col_indices()[j]], val);
-                }
-            }
-        }
-
         bool changed = false;
+
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t i = 0; i < A.rows(); ++i) {
             if (row_max[i] > 0.0) {
-                double target = 1.0;
-                double scale = target / row_max[i];
+                const double scale = 1.0 / row_max[i];
                 if (std::abs(scale - 1.0) > 1e-6) {
                     result.row_scales[i] *= scale;
                     changed = true;
                 }
             }
         }
+
+        effective_maxima(A, result.row_scales, result.col_scales, row_max, col_max);
         for (std::size_t j = 0; j < A.cols(); ++j) {
             if (col_max[j] > 0.0) {
-                double target = 1.0;
-                double scale = target / col_max[j];
+                const double scale = 1.0 / col_max[j];
                 if (std::abs(scale - 1.0) > 1e-6) {
                     result.col_scales[j] *= scale;
                     changed = true;

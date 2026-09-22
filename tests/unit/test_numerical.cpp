@@ -125,6 +125,12 @@ TEST(ScalingTest, GeometricScaling) {
     EXPECT_GT(result.max_col_scale, 0.0);
     EXPECT_TRUE(result.converged);
     EXPECT_GT(result.iterations, 0);
+
+    double max_abs = 0.0;
+    for (const auto& t : triplets) {
+        max_abs = std::max(max_abs, std::abs(t.value) * result.row_scales[t.row] * result.col_scales[t.col]);
+    }
+    EXPECT_LT(max_abs, 2.0);
 }
 
 TEST(ScalingTest, ApplyScales) {
@@ -160,6 +166,13 @@ TEST(ScalingTest, CurtisReidScaling) {
 
     EXPECT_GT(result.max_row_scale, 0.0);
     EXPECT_GT(result.max_col_scale, 0.0);
+    EXPECT_TRUE(result.converged);
+
+    double max_abs = 0.0;
+    for (const auto& t : triplets) {
+        max_abs = std::max(max_abs, std::abs(t.value) * result.row_scales[t.row] * result.col_scales[t.col]);
+    }
+    EXPECT_LT(max_abs, 2.0);
 }
 
 TEST(ScalingTest, EquilibrationScaling) {
@@ -174,6 +187,13 @@ TEST(ScalingTest, EquilibrationScaling) {
 
     EXPECT_GT(result.max_row_scale, 0.0);
     EXPECT_GT(result.max_col_scale, 0.0);
+    EXPECT_TRUE(result.converged);
+
+    double max_abs = 0.0;
+    for (const auto& t : triplets) {
+        max_abs = std::max(max_abs, std::abs(t.value) * result.row_scales[t.row] * result.col_scales[t.col]);
+    }
+    EXPECT_LT(max_abs, 2.0);
 }
 
 TEST(FactorizationTest, LUCreate) {

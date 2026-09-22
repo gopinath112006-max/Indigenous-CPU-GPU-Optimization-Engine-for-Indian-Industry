@@ -380,10 +380,15 @@ void SparseLU::numeric_factorization(const SparseMatrix& A) {
         return;
     }
     numeric_factorization_sparse(scaled_A);
+    if (stats_.singular && std::getenv("HYPERNOVA_FACT_DBG")) {
+        std::cerr << "FACTORIZATION RETURNED SINGULAR!\n";
+    }
 }
 
 void SparseLU::numeric_factorization_dense(const SparseMatrix& A) {
-std::cerr << "DENSE FACTORIZATION!\n";
+    if (std::getenv("HYPERNOVA_FACT_DBG")) {
+        std::cerr << "DENSE FACTORIZATION!\n";
+    }
     const std::size_t n = A.rows();
     dense_n_ = n;
     L_values_.clear();
@@ -582,7 +587,6 @@ std::cerr << "DENSE FACTORIZATION!\n";
 }
 
 void SparseLU::numeric_factorization_sparse(const SparseMatrix& A) {
-std::cerr << "SPARSE FACTORIZATION!\n";
     const std::size_t n = A.rows();
     dense_n_ = n;
     L_values_.clear();
@@ -615,178 +619,143 @@ std::cerr << "SPARSE FACTORIZATION!\n";
         return;
     }
 
-    // Default initialize the empty topology so downstream readers are valid
-    // even if an early branch bails out.
-
-    symbolic_.row_perm.assign(n, 0);
-    symbolic_.L_row_ptr.assign(n + 1, 0);
-    symbolic_.U_row_ptr.assign(n + 1, 0);
-
-    // Column-oriented (CSC) view of A for left-looking column access.
-    std::vector<std::size_t> col_ptr(n + 1, 0);
-    std::vector<std::size_t> col_row(A.nnz());
-    std::vector<double> col_val(A.nnz());
-    {
-        std::vector<std::size_t> counts(n, 0);
-        for (std::size_t k = 0; k < A.nnz(); ++k) ++counts[A.col_indices()[k]];
-        for (std::size_t j = 0; j < n; ++j) col_ptr[j + 1] = col_ptr[j] + counts[j];
-        std::vector<std::size_t> next = col_ptr;
-        for (std::size_t i = 0; i < n; ++i) {
-            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
-                const std::size_t j = A.col_indices()[k];
-                col_row[next[j]] = i;
-                col_val[next[j]] = A.values()[k];
-                ++next[j];
-            }
+    // Dense working Schur complement: S[i][j] indexed by physical row i and col j.
+    std::vector<std::vector<double>> S(n, std::vector<double>(n, 0.0));
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+            S[i][A.col_indices()[k]] = A.values()[k];
         }
     }
 
-    // Position <-> physical row bookkeeping. Position i is assigned the
-    // physical pivot row of EliminationStep i once chosen.
-    std::vector<std::size_t> pivot_row(n);
-    std::iota(pivot_row.begin(), pivot_row.end(), 0);
-    std::vector<std::size_t> pos_of(n);
-    std::iota(pos_of.begin(), pos_of.end(), 0);
+    // row_perm[pos] = physical row at elimination step pos
+    // col_perm[pos] = physical col at elimination step pos
+    std::vector<std::size_t> row_perm(n), col_perm(n);
+    std::iota(row_perm.begin(), row_perm.end(), 0);
+    std::iota(col_perm.begin(), col_perm.end(), 0);
 
-    // L as columns (rows are strictly below the diagonal, position labels),
-    // U as columns (rows are strictly above the diagonal, position labels).
-    // Diagonals: L[i][i] == 1 implicit; U[i][i] == pivot kept in reciprocals_.
-    // left-looking elimination produces the j-th column of U and L from the
-    // forward substitution y = L^{-1} A[:,j]: y[p] for p <= j is the upper
-    // entry U[p][j], y[p] for p > j the multiplier source L[p][j].
+    const double u_thresh = tol_.markowitz_tol();
+    const double drop_tol = std::max(tol_.zero_tol(), 1e-15);
+
+    std::size_t rank = 0;
+    bool singular = false;
+
+    for (std::size_t step = 0; step < n; ++step) {
+        // 1. Find global maximum in active submatrix [step..n-1] x [step..n-1]
+        double global_max = 0.0;
+        for (std::size_t i = step; i < n; ++i) {
+            std::size_t ri = row_perm[i];
+            for (std::size_t j = step; j < n; ++j) {
+                double v = std::abs(S[ri][col_perm[j]]);
+                if (v > global_max) global_max = v;
+            }
+        }
+
+        if (global_max <= drop_tol) {
+            singular = true;
+            break;
+        }
+
+        double thresh = u_thresh * global_max;
+
+        // 2. Count active nnz per row and column
+        std::vector<std::size_t> rnz(n, 0), cnz(n, 0);
+        for (std::size_t i = step; i < n; ++i) {
+            std::size_t ri = row_perm[i];
+            for (std::size_t j = step; j < n; ++j) {
+                if (std::abs(S[ri][col_perm[j]]) > drop_tol) {
+                    ++rnz[i];
+                    ++cnz[j];
+                }
+            }
+        }
+
+        // 3. Markowitz search: minimize (rnz[i]-1)*(cnz[j]-1) subject to |S| >= thresh
+        std::size_t best_i = step, best_j = step;
+        long long best_mk = std::numeric_limits<long long>::max();
+        double best_abs = 0.0;
+
+        for (std::size_t i = step; i < n; ++i) {
+            std::size_t ri = row_perm[i];
+            for (std::size_t j = step; j < n; ++j) {
+                double v = std::abs(S[ri][col_perm[j]]);
+                if (v < thresh) continue;
+                long long r1 = static_cast<long long>(rnz[i] > 0 ? rnz[i] - 1 : 0);
+                long long c1 = static_cast<long long>(cnz[j] > 0 ? cnz[j] - 1 : 0);
+                long long mk = r1 * c1;
+                if (mk < best_mk || (mk == best_mk && v > best_abs)) {
+                    best_mk = mk;
+                    best_i = i;
+                    best_j = j;
+                    best_abs = v;
+                }
+            }
+        }
+
+        // 4. Swap positions: step <-> best_i (rows), step <-> best_j (cols)
+        if (best_i != step) std::swap(row_perm[step], row_perm[best_i]);
+        if (best_j != step) std::swap(col_perm[step], col_perm[best_j]);
+
+        std::size_t pr = row_perm[step];
+        std::size_t pc = col_perm[step];
+        double pivot = S[pr][pc];
+
+        if (std::abs(pivot) <= drop_tol) {
+            singular = true;
+            break;
+        }
+
+        reciprocals_[step] = 1.0 / pivot;
+
+        // 5. In-place Gaussian elimination:
+        // Multipliers are stored in S[ri][pc], and Schur complement is updated
+        for (std::size_t i = step + 1; i < n; ++i) {
+            std::size_t ri = row_perm[i];
+            double mult = S[ri][pc] / pivot;
+            S[ri][pc] = mult; // store multiplier in lower triangle
+            if (std::abs(mult) <= drop_tol) continue;
+
+            for (std::size_t j = step + 1; j < n; ++j) {
+                std::size_t cj = col_perm[j];
+                S[ri][cj] -= mult * S[pr][cj];
+            }
+        }
+
+        ++rank;
+    }
+
+    // 6. Extract L and U from S in final permutation order
+    // Lcol_rows[step] holds row positions i > step with nonzero multiplier
+    // Ucol_rows[col] holds row positions i < col with nonzero U entry
     std::vector<std::vector<std::size_t>> Lcol_rows(n);
     std::vector<std::vector<double>> Lcol_vals(n);
     std::vector<std::vector<std::size_t>> Ucol_rows(n);
     std::vector<std::vector<double>> Ucol_vals(n);
 
-    // Per-column forward-substitution workspace: y[p] holds the running value
-    // at position p, queued tracks membership in the current column's sparse
-    // working set (stamp-based removal-free clearing).
-    std::vector<double> y(n, 0.0);
-    std::vector<unsigned int> queued(n, 0);
-    std::set<std::size_t> work;
-
-    std::size_t rank = 0;
-    bool singular = false;
-
-    for (std::size_t col = 0; col < n; ++col) {
-        const unsigned int stamp = static_cast<unsigned int>(col + 1);
-
-        // Fresh working values for this column; the pivot scan reads the whole
-        // active range and must never see stale entries from earlier columns.
-        y.assign(n, 0.0);
-
-        std::vector<std::size_t> active_pos;
-        active_pos.reserve(64);
-
-        // Scatter A[:, col] into y by current position of each physical row.
-        for (std::size_t k = col_ptr[col]; k < col_ptr[col + 1]; ++k) {
-            const std::size_t p = pos_of[col_row[k]];
-            if (queued[p] != stamp) {
-                queued[p] = stamp;
-                y[p] = 0.0;
-                work.insert(p);
-                active_pos.push_back(p);
-            }
-            y[p] += col_val[k];
-        }
-
-        // Left-looking forward solve: y := L^{-1} (P*), processing positions in
-        // strictly ascending order. Every contribution into y[p] arrives from
-        // a strictly smaller position (L is unit-lower), so ascending order
-        // finalizes each entry exactly once.
-        while (!work.empty()) {
-            auto it = work.begin();
-            const std::size_t p = *it;
-            work.erase(it);
-            if (queued[p] != stamp) continue;  // already finalized this column
-            queued[p] = 0;
-            const double yp = y[p];
-            if (yp == 0.0) continue;
-            const auto& lrows = Lcol_rows[p];
-            const auto& lvals = Lcol_vals[p];
-            for (std::size_t q = 0; q < lrows.size(); ++q) {
-                const std::size_t r = lrows[q];
-                if (queued[r] != stamp) {
-                    queued[r] = stamp;
-                    y[r] = 0.0;
-                    work.insert(r);
-                    active_pos.push_back(r);
-                }
-                y[r] -= lvals[q] * yp;
+    for (std::size_t k = 0; k < rank; ++k) {
+        std::size_t pk = col_perm[k];
+        for (std::size_t i = k + 1; i < n; ++i) {
+            double mult = S[row_perm[i]][pk];
+            if (std::abs(mult) > drop_tol) {
+                Lcol_rows[k].push_back(i);
+                Lcol_vals[k].push_back(mult);
             }
         }
-
-        // Partial pivoting: scan active candidate positions to find max magnitude pivot.
-        std::size_t piv = col;
-        double best = std::abs(y[col]);
-        for (std::size_t p : active_pos) {
-            if (p > col) {
-                const double v = std::abs(y[p]);
-                if (v > best) {
-                    best = v;
-                    piv = p;
-                }
-            }
-        }
-
-        // Relabel positions col <-> piv everywhere (mirrors the reference dense
-        // row permutation): L column row labels across previously factored
-        // columns, then the working values.
-        if (piv != col) {
-            for (std::size_t c = 0; c < col; ++c) {
-                for (std::size_t q = 0; q < Lcol_rows[c].size(); ++q) {
-                    if (Lcol_rows[c][q] == col) {
-                        Lcol_rows[c][q] = piv;
-                    } else if (Lcol_rows[c][q] == piv) {
-                        Lcol_rows[c][q] = col;
-                    }
-                }
-            }
-            std::swap(y[col], y[piv]);
-            std::swap(pivot_row[col], pivot_row[piv]);
-            pos_of[pivot_row[col]] = col;
-            pos_of[pivot_row[piv]] = piv;
-        }
-
-        const double pivot = y[col];
-        if (std::abs(pivot) <= std::max(tol_.singular_tol(), 1e-14)) {
-            singular = true;
-            continue;
-        }
-
-        // U column col: strictly upper entries (rows < col) from the forward solve.
-        // The pivot diagonal is stored separately in reciprocals_.
-        {
-            auto& uc = Ucol_rows[col];
-            auto& uv = Ucol_vals[col];
-            for (std::size_t p = 0; p < col; ++p) {
-                if (std::abs(y[p]) > tol_.zero_tol()) {
-                    uc.push_back(p);
-                    uv.push_back(y[p]);
-                }
-            }
-        }
-
-        // L column col: multipliers over rows strictly below the pivot.
-        {
-            auto& lr = Lcol_rows[col];
-            auto& lv = Lcol_vals[col];
-            const double inv = 1.0 / pivot;
-            for (std::size_t p = col + 1; p < n; ++p) {
-                const double lval = y[p] * inv;
-                if (std::abs(lval) > tol_.zero_tol()) {
-                    lr.push_back(p);
-                    lv.push_back(lval);
-                }
-            }
-        }
-
-        reciprocals_[col] = 1.0 / pivot;
-        ++rank;
     }
 
-    symbolic_.row_perm = std::move(pivot_row);
+    for (std::size_t col = 0; col < n; ++col) {
+        std::size_t pc = col_perm[col];
+        std::size_t stop = std::min(col, rank);
+        for (std::size_t row = 0; row < stop; ++row) {
+            double uval = S[row_perm[row]][pc];
+            if (std::abs(uval) > drop_tol) {
+                Ucol_rows[col].push_back(row);
+                Ucol_vals[col].push_back(uval);
+            }
+        }
+    }
+
+    symbolic_.row_perm = row_perm;
+    symbolic_.col_perm = col_perm;
 
     publish_factors(A, rank, singular, Lcol_rows, Lcol_vals, Ucol_rows, Ucol_vals);
 
@@ -801,7 +770,6 @@ std::cerr << "SPARSE FACTORIZATION!\n";
         stats_.condition_estimate = 0.0;
     }
 }
-
 void SparseLU::publish_factors(const SparseMatrix& A,
                                std::size_t rank,
                                bool singular,
@@ -939,6 +907,10 @@ void SparseLU::solve(std::vector<double>& x) const {
     const std::size_t n = dense_n_;
     if (n == 0 || x.size() != n) return;
 
+    if (!row_scale_.empty()) {
+        for (std::size_t i = 0; i < n; ++i) x[i] *= row_scale_[i];
+    }
+
     apply_row_perm(x);
 
     // Forward substitution: L y = x (L unit lower triangular, CSR). In place.
@@ -976,6 +948,11 @@ void SparseLU::solve(std::vector<double>& x) const {
     }
 
     if (!symbolic_.col_perm.empty()) apply_col_perm_inv(x);
+
+    if (!col_scale_.empty()) {
+        for (std::size_t i = 0; i < n; ++i) x[i] *= col_scale_[i];
+    }
+
     apply_eta_forward(x);
 }
 
@@ -994,6 +971,11 @@ void SparseLU::solve_transpose(std::vector<double>& x) const {
     if (n == 0 || x.size() != n) return;
 
     apply_eta_transpose(x);
+
+    if (!col_scale_.empty()) {
+        for (std::size_t i = 0; i < n; ++i) x[i] *= col_scale_[i];
+    }
+
     if (!symbolic_.col_perm.empty()) apply_col_perm(x);
 
     // z = U^{-T} b using the CSC pattern of U (rows with U[k][i], k < i).
@@ -1031,6 +1013,10 @@ void SparseLU::solve_transpose(std::vector<double>& x) const {
     }
 
     apply_row_perm_inv(x);
+
+    if (!row_scale_.empty()) {
+        for (std::size_t i = 0; i < n; ++i) x[i] *= row_scale_[i];
+    }
 }
 
 void SparseLU::apply_eta_transpose(std::vector<double>& x) const {
@@ -1062,6 +1048,8 @@ std::unique_ptr<SparseFactorization> SparseLU::clone() const {
     copy->dense_L_ = dense_L_;
     copy->dense_U_ = dense_U_;
     copy->dense_n_ = dense_n_;
+    copy->row_scale_ = row_scale_;
+    copy->col_scale_ = col_scale_;
     copy->eta_chain_ = eta_chain_;
     copy->stats_ = stats_;
     copy->tol_ = tol_;

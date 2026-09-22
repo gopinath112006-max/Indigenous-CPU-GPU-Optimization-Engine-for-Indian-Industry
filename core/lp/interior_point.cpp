@@ -185,8 +185,15 @@ numerical::SparseMatrix build_normal_equations(
         }
     }
 
+    std::vector<double> diag(m, 0.0);
+    for (const auto& t : triplets) {
+        if (t.row == t.col) diag[t.row] += t.value;
+    }
+    double max_diag = 0.0;
+    for (std::size_t i = 0; i < m; ++i) max_diag = std::max(max_diag, diag[i]);
+    double dyn_reg = std::max(regularization, 1e-12 * max_diag);
     for (std::size_t i = 0; i < m; ++i) {
-        triplets.emplace_back(i, i, regularization);
+        triplets.emplace_back(i, i, dyn_reg);
     }
 
     return numerical::SparseMatrix::from_triplets(m, m, triplets);
@@ -433,11 +440,16 @@ InteriorPointResult InteriorPointSolver::solve(const model::Problem& problem) {
             return result;
         }
 
+        double b_norm = 1.0;
+        for (double v : f.rhs) b_norm = std::max(b_norm, std::abs(v));
+        double c_norm = 1.0;
+        for (double v : f.c) c_norm = std::max(c_norm, std::abs(v));
+
         std::vector<double> lam(f.m(), 0.0);
-        std::vector<double> x(f.n(), 1.0);
+        std::vector<double> x(f.n(), b_norm + 1.0);
         std::vector<double> z(f.n());
         for (std::size_t j = 0; j < f.n(); ++j) {
-            z[j] = std::max(1.0, std::abs(f.c[j]));
+            z[j] = std::max(c_norm + 1.0, std::abs(f.c[j]));
         }
 
         std::vector<double> rp(f.m()), rd(f.n());
@@ -523,7 +535,7 @@ for (std::size_t j = 0; j < f.n(); ++j) D[j] = x[j] / z[j];
             // pseudo-convergence). Clamp instead of aborting so the barrier can
             // keep iterating toward true KKT feasibility.
             for (std::size_t j = 0; j < f.n(); ++j) {
-                if (!(D[j] >= 0.0) || !std::isfinite(D[j]) || D[j] > 1e16) D[j] = 1e16;
+                if (!(D[j] >= 0.0) || !std::isfinite(D[j]) || D[j] > 1e10) D[j] = 1e10;
             }
 
             numerical::SparseMatrix N = build_normal_equations(f.M, D, options_.regularization,

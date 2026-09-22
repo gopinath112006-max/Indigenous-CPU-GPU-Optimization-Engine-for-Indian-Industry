@@ -62,15 +62,15 @@ public:
         cfg.feasibility_tol_ = 1e-9;
         cfg.optimality_tol_ = 1e-9;
         cfg.complementarity_tol_ = 1e-6;
-        cfg.pivot_tol_ = 1e-12;
+        cfg.pivot_tol_ = 1e-7;   // Raised from 1e-12: prevents degenerate pivots -> singular refactorization
         cfg.integrality_tol_ = 1e-6;
         cfg.ipm_convergence_tol_ = 1e-8;
         cfg.ipm_complementarity_tol_ = 1e-8;
         cfg.mip_gap_tol_ = 1e-4;
-        cfg.singular_tol_ = 1e-14;
+        cfg.singular_tol_ = 1e-10; // Raised from 1e-14: more aggressively flags near-singular pivots
         cfg.zero_tol_ = 1e-15;
         cfg.degeneracy_tol_ = 1e-10;
-        cfg.markowitz_tol_ = 0.01;
+        cfg.markowitz_tol_ = 0.1;  // Raised from 0.01: stronger numerical stability preference
         return cfg;
     }
 
