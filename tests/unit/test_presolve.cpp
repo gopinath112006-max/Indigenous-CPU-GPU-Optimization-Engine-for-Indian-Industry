@@ -53,6 +53,75 @@ TEST(PresolveTest, FixedVariable) {
     EXPECT_GE(result.fixed_variables.size(), 1);
 }
 
+TEST(PresolveTest, FixedVariableQuadraticObjectiveEquivalence) {
+    // min 1*x0 + 2*x0^2 - 5*x1 + x1^2 + 3*x0*x1 + 7, with x0 fixed at 2.
+    // Elimination folds x0's linear/quadratic contributions and the x0*x1
+    // cross term (3*2 = 6) into x1's reduced objective and a constant offset,
+    // so objective(x1) == 17 + 1*x1 + x1^2 == original objective(2, x1).
+    ProblemBuilder builder("qp_fixed");
+    builder.add_variable(2.0, 2.0, VarType::CONTINUOUS, "x0_fixed");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 1.0}, {1, -5.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 4.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    builder.add_quadratic_term(0, 1, 3.0);
+
+    Problem prob = builder.build();
+    prob.obj_offset = 7.0;
+
+    Presolver presolver;
+    PresolveResult result = presolver.presolve(prob);
+
+    bool fixed_x0 = false;
+    for (const auto& [idx, val_pair] : result.fixed_variables) {
+        if (idx == 0 && val_pair.second == 2.0) fixed_x0 = true;
+    }
+    ASSERT_TRUE(fixed_x0);
+    ASSERT_EQ(result.reduced_problem.variables.size(), 1u);
+
+    const Problem& rp = result.reduced_problem;
+    EXPECT_DOUBLE_EQ(rp.obj_offset, 7.0 + 1.0 * 2.0 + 0.5 * 4.0 * 2.0 * 2.0);
+    EXPECT_DOUBLE_EQ(rp.variables[0].objective_coeff, -5.0 + 3.0 * 2.0);
+    ASSERT_EQ(rp.quadratic_terms.size(), 1u);
+    EXPECT_EQ(rp.quadratic_terms[0].row, 0u);
+    EXPECT_EQ(rp.quadratic_terms[0].col, 0u);
+    EXPECT_DOUBLE_EQ(rp.quadratic_terms[0].coeff, 2.0);
+
+    auto reduced_value = [&](double x1) {
+        double v = rp.obj_offset + rp.variables[0].objective_coeff * x1;
+        for (const auto& t : rp.quadratic_terms) {
+            v += (t.row == t.col ? 0.5 : 1.0) * t.coeff * x1 * x1;
+        }
+        return v;
+    };
+    auto original_value = [&](double x1) {
+        double v = prob.obj_offset + 1.0 * 2.0 + 2.0 * 2.0 * 2.0;
+        v += -5.0 * x1 + 3.0 * 2.0 * x1 + 0.5 * 2.0 * x1 * x1;
+        return v;
+    };
+    for (double x1 : {0.0, 1.0, 2.5, 5.0}) {
+        EXPECT_NEAR(reduced_value(x1), original_value(x1), 1e-9);
+    }
+}
+
+TEST(PresolveTest, ObjectiveOffsetPreservedAfterReduction) {
+    // A reduced problem must carry the original obj_offset even when no
+    // variable is eliminated.
+    ProblemBuilder builder("offset_lp");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x");
+    builder.add_constraint({{0, 1.0}}, ConstraintSense::LE, 8.0, "c");
+    builder.set_objective({{0, 2.0}}, ObjectiveSense::MINIMIZE);
+
+    Problem prob = builder.build();
+    prob.obj_offset = 4.5;
+
+    Presolver presolver;
+    PresolveResult result = presolver.presolve(prob);
+
+    EXPECT_DOUBLE_EQ(result.reduced_problem.obj_offset, 4.5);
+    ASSERT_GE(result.reduced_problem.variables.size(), 1u);
+}
+
 TEST(PresolveTest, Postsolve) {
     ProblemBuilder builder("test");
     builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");

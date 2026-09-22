@@ -474,13 +474,55 @@ model::Problem Presolver::build_reduced_problem(const model::Problem& prob,
             obj_coeffs.push_back({col_map[j], prob.variables[j].objective_coeff});
         }
     }
-    builder.set_objective(obj_coeffs, prob.obj_sense);
 
-    for (const auto& term : prob.quadratic_terms) {
-        if (col_keep[term.row] && col_keep[term.col]) {
-            builder.add_quadratic_term(col_map[term.row], col_map[term.col], term.coeff);
+    // Eliminated (fixed) variables must not silently drop their quadratic
+    // interactions: with one end fixed, q*x_i*x_j folds into x_i's linear
+    // coefficient; with both ends fixed it becomes an objective constant.
+    // The constant (plus the original obj_offset and any dropped linear terms)
+    // is carried on the reduced problem so it stays objective-equivalent.
+    double constant_offset = prob.obj_offset;
+    const auto fixed_at = [&](std::size_t j) -> bool {
+        return !col_keep[j] && std::abs(new_lb[j] - new_ub[j]) <= tol_.feasibility_tol();
+    };
+
+    if (!prob.quadratic_terms.empty()) {
+        std::vector<double> linear_add(prob.variables.size(), 0.0);
+        for (const auto& term : prob.quadratic_terms) {
+            const bool keep_r = col_keep[term.row];
+            const bool keep_c = col_keep[term.col];
+            if (keep_r && keep_c) {
+                builder.add_quadratic_term(col_map[term.row], col_map[term.col], term.coeff);
+            } else if (keep_r != keep_c) {
+                const std::size_t kept = keep_r ? term.row : term.col;
+                const std::size_t fixed = keep_r ? term.col : term.row;
+                if (fixed_at(fixed)) linear_add[kept] += term.coeff * new_lb[fixed];
+            } else if (fixed_at(term.row) && fixed_at(term.col)) {
+                const double factor = (term.row == term.col) ? 0.5 : 1.0;
+                constant_offset += factor * term.coeff * new_lb[term.row] * new_lb[term.col];
+            }
+        }
+        for (std::size_t j = 0; j < prob.variables.size(); ++j) {
+            if (!col_keep[j] || linear_add[j] == 0.0) continue;
+            const std::size_t k = col_map[j];
+            bool found = false;
+            for (auto& pc : obj_coeffs) {
+                if (pc.first == k) {
+                    pc.second += linear_add[j];
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) obj_coeffs.push_back({k, linear_add[j]});
         }
     }
+
+    for (std::size_t j = 0; j < prob.variables.size(); ++j) {
+        if (!col_keep[j] && fixed_at(j)) {
+            constant_offset += prob.variables[j].objective_coeff * new_lb[j];
+        }
+    }
+
+    builder.set_objective(obj_coeffs, prob.obj_sense);
 
     for (const auto& sos : prob.sos_constraints) {
         std::vector<std::size_t> new_vars;
@@ -496,7 +538,9 @@ model::Problem Presolver::build_reduced_problem(const model::Problem& prob,
         }
     }
 
-    return builder.build();
+    model::Problem reduced = builder.build();
+    reduced.obj_offset = constant_offset;
+    return reduced;
 }
 
 model::Solution Presolver::postsolve(const model::Problem& original,

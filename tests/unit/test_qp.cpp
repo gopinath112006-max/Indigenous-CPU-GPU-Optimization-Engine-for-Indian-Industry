@@ -229,24 +229,15 @@ TEST(MIQPTest, BranchAndBoundInteriorPointRelaxation) {
     BranchAndBoundSolver solver(ToleranceConfig::industrial_defaults(), opts);
     auto result = solver.solve(prob);
 
-    // IPM-QP convergence is known-unreliable (already tolerated in Phase 5).
-    // When an IPM relaxation fails to converge, the B&B must NOT certify the
-    // node as INFEASIBLE; instead it surfaces the failure status (or SUBOPTIMAL
-    // with an incumbent). When it does converge OPTIMAL, verify the result.
-    EXPECT_TRUE(result.status == ProblemStatus::OPTIMAL ||
-                result.status == ProblemStatus::ITER_LIMIT ||
-                result.status == ProblemStatus::TIME_LIMIT ||
-                result.status == ProblemStatus::NUMERICAL_ERROR ||
-                result.status == ProblemStatus::SUBOPTIMAL);
-if (result.status == ProblemStatus::OPTIMAL) {
-        EXPECT_NEAR(result.objective_value, -2.0, 0.5);
-        EXPECT_NEAR(result.primal[0], 2.0, 0.1);
-        // The IPM converges to a bound within tolerance rather than exactly
-        // onto it, so accept values within integrality tolerance of 0 or 1.
-        EXPECT_TRUE(std::abs(result.primal[1]) < 1e-4 ||
-                    std::abs(result.primal[1] - 1.0) < 1e-4);
-        EXPECT_GE(result.nodes_explored, 1u);
-    }
+// Barrier-QP node relaxations must converge for a well-posed convex MIQP.
+    // Fixed bounds (branching-fixed binaries) are modelled as equality rows in
+    // the KKT barrier, so a node relaxation must not return a failure status.
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.objective_value, -2.0, 1e-3);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-3);
+    EXPECT_TRUE(std::abs(result.primal[1]) < 1e-6 ||
+                std::abs(result.primal[1] - 1.0) < 1e-6);
+    EXPECT_GE(result.nodes_explored, 1u);
 }
 
 TEST(MIQPTest, CrossTermIntegers) {

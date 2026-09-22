@@ -262,13 +262,14 @@ TEST(APITest, SolverSolveMIQPInteriorPoint) {
     solver.set_options(opts);
     auto result = solver.solve(prob);
 
-    // IPM-QP convergence is known-unreliable; the root may fail to solve,
-    // producing INFEASIBLE with no nodes explored.
-    EXPECT_TRUE(result.is_optimal() || !result.is_feasible());
-    if (result.is_optimal()) {
-        EXPECT_NEAR(result.objective_value, -2.0, 0.5);
-        EXPECT_GE(result.bb_nodes, 1u);
-    }
+    // Barrier-QP node relaxations must converge for a well-posed convex MIQP;
+    // a fixed (branching) variable is modelled as an equality row in the KKT,
+    // so node solves must not return a failure status.
+    ASSERT_TRUE(result.is_optimal());
+    EXPECT_NEAR(result.objective_value, -2.0, 1e-3);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-3);
+    EXPECT_TRUE(result.primal[1] == 0.0 || result.primal[1] == 1.0);
+    EXPECT_GE(result.bb_nodes, 1u);
 }
 
 TEST(APITest, SolverSolveLPBAC) {

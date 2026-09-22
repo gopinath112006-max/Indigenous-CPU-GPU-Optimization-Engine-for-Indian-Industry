@@ -54,7 +54,7 @@ HyperNova is a **100% indigenous, from-scratch C++20 mathematical optimization e
 | Source files | 119 (68 `.cpp` + 40 `.hpp` + 1 `.h` + 10 `.py`) | Repository scan |
 | C++ core size | ~1.17 MB / ~40k lines of implementation | `core/`, `api/`, `tests/`, `benchmarks/` |
 | Largest modules | `simplex.cpp` 1755 L, `factorization.cpp` 1641 L, `active_set.cpp` 1066 L, `branch_and_bound.cpp` 971 L, `gpu_backend.cpp` 916 L | `core/` |
-| CTest suite | 20/20 targets PASS (~47 s) | CTest run |
+| CTest suite | 20/20 targets PASS (parallel `-j8`, ~19 min wall) | CTest run |
 | MRPL industrial models | 5/5 OPTIMAL + independently verified | `benchmarks/industrial-cases/`, `benchmarks/results/industrial-after-p6.csv` |
 | Netlib LP (shipped) | 21 instances; latest artifact: **16/21 pass** at 1e-6 ref tolerance (`benchmarks/results/netlib-baseline-p0.csv`, 2026-09-21) | see §11.2 |
 | Scalability | 100,000-variable LP solved in ~0.65 s (IPM) | `docs/SCALABILITY.md` |
@@ -261,15 +261,17 @@ All in `core/numerical/` (`factorization.cpp` 1641 L, `sparse_matrix.cpp`, `scal
 | :--- | :--- | :--- | :--- |
 | Feasibility | `1e-9` | `LOOSE: 1e-7` | primal/bound feasibility, verifier |
 | Optimality | `1e-9` | `LOOSE: 1e-7` | reduced-cost / dual optimality |
-| Pivot | `1e-12` | `LOOSE: 1e-10` | simplex pivot eligibility |
+| Pivot | `1e-7` | `LOOSE: 1e-10` | simplex pivot eligibility |
 | Integrality | `1e-6` | `LOOSE: 1e-5` | integer-feasibility |
 | IPM convergence | `1e-8` | `LOOSE: 1e-6` | barrier (Hestenes–Stiefel velocity) stop |
-| IPM complementarity (μ) | `1e-6` | `LOOSE: 1e-5` / `TIGHT: 1e-8` | barrier complementarity |
+| IPM complementarity (μ) | `1e-8` | `LOOSE: 1e-6` / `TIGHT: 1e-10` | barrier complementarity |
 | MIP gap | `1e-4` | — | B&B relative/absolute gap |
-| Singularity | `1e-14` | — | factorization conditioning guard |
+| Singularity | `1e-10` | — | factorization conditioning guard |
 | Zero / rounding | `1e-15` | — | sparsity pruning |
 | Degeneracy | `1e-10` | — | Harris perturbation trigger |
-| Markowitz criterion | `0.01` | — | pivot selection in sparse LU |
+| Markowitz criterion | `0.1` | — | pivot selection in sparse LU |
+
+The **Pivot**, **Singularity** and **Markowitz** defaults were raised from `1e-12`/`1e-14`/`0.01` to `1e-7`/`1e-10`/`0.1` in the Phase-6 hardening to prevent degenerate pivot selection from triggering singular refactorizations (see `ToleranceConfig::industrial_defaults()` in `core/numerical/tolerance.hpp`).
 
 Hard limits: iterative refinement caps at **5** iterations (sparse paths) / **4** (dense KKT); scaling caps at **10** sweeps (geometric/Curtis–Reid) / **20** (equilibration) — per `core/numerical/refinement.*` and `core/numerical/scaling.hpp`. Every converged solution passes the independent verifier at the configured feasibility tolerance (§13).
 
@@ -477,7 +479,7 @@ python benchmarks/run_comparison.py
 
 ## 10. Testing (20 CTest Targets)
 
-GTest-based unit, integration, and regression suites (`tests/`, plus `benchmarks/tests/`). **20/20 targets PASS** in approximately 48 seconds (Release). The 20th target, `test_python_api`, is registered only when Python 3 is found at configure time; without it, 19/19 pass. Both cases are green.
+GTest-based unit, integration, and regression suites (`tests/`, plus `benchmarks/tests/`). **20/20 targets PASS** on Release; the full suite runs in ~19 minutes wall-clock when executed in parallel (`ctest --test-dir build -C Release -j8`), dominated by `test_regression_smoke` (~1136 s alone). The 20th target, `test_python_api`, is registered only when Python 3 is found at configure time; without it, 19/19 pass. Both cases are green.
 
 | Test target | Covers |
 | :--- | :--- |
@@ -528,71 +530,71 @@ All five models solve to **OPTIMAL** and pass independent verification (see §12
 
 | Model | Class | Vars / Int | Constr | Status | Objective | Time (s) | Verified |
 | :--- | :--- | :---: | :---: | :--- | :--- | ---: | :---: |
-| Crude Blending | Convex QP | 5 / 0 | 4 | OPTIMAL | $22,692.12 k/day | 0.331 | ✅ |
-| Production Planning | MILP | 15 / 6 | 18 | OPTIMAL | $2,137,300.00 k | 0.0004 | ✅ |
-| Logistics Freight | MILP | 8 / 3 | 11 | OPTIMAL | $7,690.00 k/month | 0.0003 | ✅ |
-| Cogen Power | MILP | 7 / 3 | 8 | OPTIMAL | $5,420.00 /hr | 0.006 | ✅ |
+| Crude Blending | Convex QP | 5 / 0 | 4 | OPTIMAL | $22,692.12 k/day | 0.295 | ✅ |
+| Production Planning | MILP | 15 / 6 | 18 | OPTIMAL | $2,137,300.00 k | 0.0003 | ✅ |
+| Logistics Freight | MILP | 8 / 3 | 11 | OPTIMAL | $7,690.00 k/month | 0.0001 | ✅ |
+| Cogen Power | MILP | 7 / 3 | 8 | OPTIMAL | $5,420.00 /hr | 0.002 | ✅ |
 | Hydrogen Network | LP | 5 / 0 | 4 | OPTIMAL | $69.96 k/hr | 0.0002 | ✅ |
 
 These are the **critical SIH evidence** and are protected by dedicated tests (`test_industrial_cases`) — they must not break.
 
 ### 11.2 Netlib LP — 21 shipped instances
 
-Latest recorded artifact (`benchmarks/results/netlib-baseline-p0.csv`, regenerated **2026-09-21** on `build-p0`, Release): 21 instances, **16 OPTIMAL**, **16/21 pass** at 1e-6 reference tolerance, 60 s/instance time limit.
+Latest recorded artifact (`benchmarks/results/netlib-baseline-p0.csv`, regenerated **2026-09-21** on `build-p0`, Release): 21 instances, **17 OPTIMAL**, **16/21 pass** at 1e-6 reference tolerance, 60 s/instance time limit.
 
 | Instance | Rows | Cols | Status | Pass | Objective | Time (s) | Iters |
 | :--- | ---: | ---: | :--- | :---: | :--- | ---: | ---: |
-| 25fv47 | 821 | 1571 | TIME_LIMIT | ✗ | — | 60.0 | 832 |
-| adlittle | 56 | 97 | OPTIMAL | ✅ | 225494.96 | 0.012 | 258 |
+| 25fv47 | 821 | 1571 | ITER_LIMIT | ✗ | 0.0625 | 60.0 | 832 |
+| adlittle | 56 | 97 | OPTIMAL | ✅ | 225494.96 | 0.007 | 258 |
 | afiro | 27 | 32 | OPTIMAL | ✅ | −464.7531 | 0.001 | 36 |
-| bandm | 305 | 472 | ITER_LIMIT | ✗ | — | 40.9 | 626 |
-| blend | 74 | 83 | OPTIMAL | ✅ | −30.81215 | 0.042 | 509 |
-| dfl001 | 6071 | 12230 | TIME_LIMIT | ✗ | — | 60.0 | 0 |
-| israel | 174 | 142 | OPTIMAL | ✅ | −896644.8 | 0.044 | 387 |
-| kb2 | 43 | 41 | OPTIMAL | ✅ | −1749.900 | 0.004 | 107 |
-| recipe | 91 | 180 | OPTIMAL | ✅ | −266.616 | 0.010 | 123 |
-| sc105 | 105 | 103 | OPTIMAL | ✅ | −52.20206 | 0.006 | 119 |
-| sc205 | 205 | 203 | OPTIMAL | ✅ | −52.20206 | 0.020 | 233 |
-| sc50a | 50 | 48 | OPTIMAL | ✅ | −64.57508 | 0.002 | 53 |
-| sc50b | 50 | 48 | OPTIMAL | ✅ | −70.00000 | 0.002 | 48 |
-| sctap1 | 300 | 480 | OPTIMAL | ✅ | 1412.250 | 0.127 | 1106 |
-| sctap2 | 1090 | 1880 | OPTIMAL | ✅ | 1724.807 | 0.895 | 1573 |
-| sctap3 | 1480 | 2480 | OPTIMAL | ✅ | 1424.000 | 1.617 | 1716 |
-| share1b | 117 | 225 | OPTIMAL | ✅ | −76589.32 | 0.062 | 829 |
-| share2b | 96 | 79 | OPTIMAL | ✅ | −415.7322 | 0.011 | 231 |
-| shell | 536 | 1775 | OPTIMAL | ✗* | 1208825346.0 | 0.386 | 1205 |
-| stair | 356 | 467 | OPTIMAL | ✅ | −251.2670 | 0.410 | 1120 |
-| tuff | 333 | 587 | ITER_LIMIT | ✗ | — | 54.6 | 323 |
+| bandm | 305 | 472 | ITER_LIMIT | ✗ | — | 30.3 | 626 |
+| blend | 74 | 83 | OPTIMAL | ✅ | −30.81215 | 0.020 | 509 |
+| dfl001 | 6071 | 12230 | TIME_LIMIT | ✗ | 8222687008.1 | 60.0 | 0 |
+| israel | 174 | 142 | OPTIMAL | ✅ | −896644.8 | 0.094 | 387 |
+| kb2 | 43 | 41 | OPTIMAL | ✅ | −1749.900 | 0.012 | 107 |
+| recipe | 91 | 180 | OPTIMAL | ✅ | −266.616 | 0.019 | 123 |
+| sc105 | 105 | 103 | OPTIMAL | ✅ | −52.20206 | 0.013 | 119 |
+| sc205 | 205 | 203 | OPTIMAL | ✅ | −52.20206 | 0.049 | 233 |
+| sc50a | 50 | 48 | OPTIMAL | ✅ | −64.57508 | 0.005 | 53 |
+| sc50b | 50 | 48 | OPTIMAL | ✅ | −70.00000 | 0.004 | 48 |
+| sctap1 | 300 | 480 | OPTIMAL | ✅ | 1412.250 | 0.296 | 1106 |
+| sctap2 | 1090 | 1880 | OPTIMAL | ✅ | 1724.807 | 1.222 | 1573 |
+| sctap3 | 1480 | 2480 | OPTIMAL | ✅ | 1424.000 | 3.451 | 1716 |
+| share1b | 117 | 225 | OPTIMAL | ✅ | −76589.32 | 0.112 | 829 |
+| share2b | 96 | 79 | OPTIMAL | ✅ | −415.7322 | 0.029 | 231 |
+| shell | 536 | 1775 | OPTIMAL | ✗* | 1208825346.0 | 0.902 | 1205 |
+| stair | 356 | 467 | OPTIMAL | ✅ | −251.2670 | 0.950 | 1120 |
+| tuff | 333 | 587 | ITER_LIMIT | ✗ | — | 60.0 | 323 |
 
 \* `shell` (−1.3e-6 relative) is **verified OPTIMAL** (feasibility passes) but its objective is marginally outside the 1e-6 reference tolerance, so it does not count as `pass`.
 
-**Pass rate: 16/21 (76%).** The `stair` instance — previously failing with a simplex cycling issue — now solves **OPTIMAL in 0.41 s** after restoring the Bland anti-cycling ratio-tie tolerance (§16 #7). Known hard instances: `25fv47` and `dfl001` hit the 60 s time limit (barrier/normal-equation structure), `bandm`/`tuff` hit the iteration cap, `shell` is marginally outside tolerance. These are honest limits, not hidden failures.
+**Pass rate: 16/21 (76%).** 17 instances solve to OPTIMAL (`shell` is verified-optimal but marginally outside reference tolerance, so it is not a pass). The `stair` instance — previously failing with a simplex cycling issue — now solves **OPTIMAL in 0.95 s** after restoring the Bland anti-cycling ratio-tie tolerance (§16 #7). Known hard instances: `dfl001` hits the 60 s time limit (stalled barrier/normal-equation structure); `25fv47`, `bandm` and `tuff` hit the iteration cap (25fv47 returns an uncertified best objective of 0.0625; the others none); `shell` is marginally outside tolerance. These are honest limits, not hidden failures.
 
 ### 11.3 MIPLIB 2017 — 10 shipped instances
 
-Fresh measured result (`benchmarks/results/miplib-baseline-p0.csv`, 2026-09-21, 60 s/instance): **1/10 full PASS**, in line with the honest `README/TODO.md` framing. All instances reach **honest TIME_LIMIT incumbents** where they cannot prove optimality — a TIME_LIMIT result is never converted into INFEASIBLE or a fabricated OPTIMAL.
+Fresh measured result (`benchmarks/results/miplib-baseline-p0.csv`, 2026-09-21, 60 s/instance): **1/10 full PASS**, in line with the honest `README/TODO.md` framing. Where optimality cannot be established within the budget, instances return honest `TIME_LIMIT` results with their best incumbent/bound — a limit is never converted into INFEASIBLE or a fabricated OPTIMAL.
 
 | Instance | Rows | Cols | Int | Status | Best obj | Best bound | Gap | Time (s) |
 | :--- | ---: | ---: | ---: | :--- | :--- | :--- | :--- | ---: |
 | enlight8 | 64 | 128 | 128 | TIME_LIMIT | — | 1.0 | ∞ | 60.0 |
-| enlight_hard | 100 | 200 | 200 | TIME_LIMIT | — | 2.0 | ∞ | 60.1 |
-| **flugpl** | 18 | 18 | 11 | **OPTIMAL** | 1201500.0 | 1201500.0 | 0% | 3.26 |
-| gen-ip002 | 24 | 41 | 41 | TIME_LIMIT | −4706.70 | −4840.54 | 2.84% | 60.0 |
-| glass4 | 396 | 322 | 302 | TIME_LIMIT | — | ∞ | ∞ | 60.0 |
-| markshare1 | 6 | 62 | 50 | TIME_LIMIT | 39.0 | 0.0 | ∞ | 60.1 |
-| mas74 | 13 | 151 | 150 | INFEASIBLE | — | — | — | 0.13 |
-| mas76 | 12 | 151 | 150 | TIME_LIMIT | 42531.50 | 1.0 | ∞ | 60.0 |
-| mik-250-20-75-4 | 195 | 270 | 250 | TIME_LIMIT | 663876 | −61651.2 | >100% | 60.1 |
-| p0201 | 133 | 201 | 201 | TIME_LIMIT | 7615.0\* | 1.0 | ∞ | 60.0 |
+| enlight_hard | 100 | 200 | 200 | TIME_LIMIT | — | 2.0 | ∞ | 60.0 |
+| **flugpl** | 18 | 18 | 11 | **OPTIMAL** | 1201500.0 | 1201500.0 | 0% | 1.12 |
+| gen-ip002 | 24 | 41 | 41 | OPTIMAL | −4460.40 | −4460.40 | 0% | 0.03 |
+| glass4 | 396 | 322 | 302 | TIME_LIMIT | — | 1.0 | ∞ | 60.1 |
+| markshare1 | 6 | 62 | 50 | TIME_LIMIT | 32.0 | 0.0 | ∞ | 60.1 |
+| mas74 | 13 | 151 | 150 | INFEASIBLE | — | — | — | 0.08 |
+| mas76 | 12 | 151 | 150 | OPTIMAL | 44048.43 | 44048.43 | 0% | 0.05 |
+| mik-250-20-75-4 | 195 | 270 | 250 | TIME_LIMIT | 663876 | −61651.2 | 109.3% | 60.1 |
+| p0201 | 133 | 201 | 201 | TIME_LIMIT | 7675.0 | 6875.0 | 10.4% | 60.0 |
 
-\* `p0201` finds the **published optimum** (7615.0) as its incumbent but cannot close the gap under the 60 s limit, so it is reported honestly as TIME_LIMIT.
+`gen-ip002` (`−4460.40` vs published `−4783.733`) and `mas76` (`44048.43` vs published `40005.054`) solve to **verified OPTIMAL** but their objectives diverge from the published references — flagged as a suspected reference/model-sense discrepancy in §16 #10; neither counts as a pass. `p0201` reaches a best incumbent of 7675.0 with best bound 6875.0 (10.4% gap) under the 60 s limit — NOT reproduced to the published 7615.0, so its incumbent is reported honestly as TIME_LIMIT.
 
-`mas74` is reported **INFEASIBLE** by the current build despite a published optimum of 11801.186 — flagged as a suspected bug in §16 #8 (under investigation). MIPLIB parity on hard instances remains the acknowledged weakest area (§17); the shipped instances validly exercise the B&B cut/heuristic stack even where they do not close.
+`mas74` is reported **INFEASIBLE** (0.08 s) by the current build despite a published optimum of 11801.186 — flagged as a suspected bug in §16 #8 (under investigation). MIPLIB parity on hard instances remains the acknowledged weakest area (§17); the shipped instances validly exercise the B&B cut/heuristic stack even where they do not close.
 
 ### 11.4 QPLIB & Mittelmann
 
-- **QPLIB:** 6 instances shipped (`QPLIB_10050 … QPLIB_3980`) — all are **MIQP** (150–300 integer vars). HyperNova's quadratic engine is **convex-QP only**, so the MIQP branch-and-bound path cannot close them: **0/6 pass** within the 60 s limit (all TIME_LIMIT, `benchmarks/results/qplib-baseline-p0.csv`). Convex *continuous* QP capability is evidenced instead by the MRPL crude-blending QP (§11.1), the QP unit/regression suite, and `tests/unit/test_qp.cpp`. This corrects the earlier "6 convex QP models validated" phrasing.
-- **Mittelmann:** 2 instances (`benchmarks/results/mittelmann-baseline-p0.csv`, 2026-09-21): `agg` **PASS** (−35,991,767.29, 0.20 s), `fit2p` **TIME_LIMIT** (honest — incumbent not at the HiGHS-verified optimum 68464.29).
+- **QPLIB:** 6 instances shipped (`QPLIB_10050 … QPLIB_3980`) — all are **MIQP** (25–300 integer vars). HyperNova's quadratic engine is **convex-QP only**, so the MIQP branch-and-bound path cannot close them: **0/6 pass** within the 60 s limit (`benchmarks/results/qplib-baseline-p0.csv`). Terminal statuses are honest: 3× `TIME_LIMIT` (`QPLIB_10069`, `QPLIB_3913` at 65.9 s, `QPLIB_3980`) and 3× `NUMERICAL_ERROR` at the root (`QPLIB_10050`, `QPLIB_10056`, `QPLIB_3871` — barrier regularization exhausted, no incumbent). Convex *continuous* QP capability is evidenced instead by the MRPL crude-blending QP (§11.1), the QP unit/regression suite, and `tests/unit/test_qp.cpp`. This corrects the earlier "6 convex QP models validated" phrasing.
+- **Mittelmann:** 2 instances (`benchmarks/results/mittelmann-baseline-p0.csv`, 2026-09-21): `agg` **PASS** (−35,991,767.29, 0.059 s), `fit2p` **TIME_LIMIT** (honest — best objective 2,675,130.0, best bound 0.0; incumbent not at the HiGHS-verified optimum 68464.29).
 
 ### 11.5 Parallel & GPU scaling
 
@@ -633,7 +635,7 @@ Five production-grade refinery models (`benchmarks/industrial-cases/README.md`, 
 - **Domain:** SPM crude imports + BS-VI / Euro-VI fuel-quality compliance
 - **Formulation (5 vars, 4 constr, off-diagonal Q):** minimize procurement cost + quadratic giveaway penalty $\min\sum_i c_i x_i + \tfrac{1}{2}w(\sum_i S_i x_i - S_{target}\sum_i x_i)^2$; blends: Arab Light, Bonny Light, Maya Heavy, Murban Sweet, Basrah Heavy
 - **Constraints:** 300 k bbl/day distillation target; API gravity ≥ 31.0°; max sulfur ≤ 1.40% wt; viscosity in [3.5, 5.0] cSt
-- **Result:** OPTIMAL, $22,692.12 k/day (0.33 s, active-set QP); verified feasibility (BS-VI sulfur limit ≤ 1.80%, API ≥ 31.0)
+- **Result:** OPTIMAL, $22,692.12 k/day (0.30 s, QP); verified feasibility (BS-VI sulfur limit ≤ 1.80%, API ≥ 31.0)
 
 ### Case 2 — Multi-Period Refinery Production Planning & Mode Switching (MILP)
 - **Domain:** Phase-III Hydrocracker / FCCU mode selection across a 3-month horizon
@@ -653,7 +655,7 @@ Five production-grade refinery models (`benchmarks/industrial-cases/README.md`, 
 ### Case 5 — Refinery Hydrogen Network Purity & Feedstock (LP)
 - **Domain:** DHDS & VGO hydrotreater hydrogen, PSA purification
 - **Formulation (5 vars, 4 constr):** min natural-gas reformer feedstock expense; purity & mass balances; hydrotreater demands; PSA recovery limits
-- **Result:** OPTIMAL, $69.96 k/hr (reformer NG 128.8k Nm³/hr; CCR off-gas PSA recovery 72.0k Nm³/hr; solved in 5 simplex iterations, ~0.21 ms)
+- **Result:** OPTIMAL, $69.96 k/hr (reformer NG 128.8k Nm³/hr; CCR off-gas PSA recovery 72.0k Nm³/hr; solved in 5 simplex iterations, ~0.19 ms)
 
 ### Business impact — what is real vs. projected (honest split)
 
@@ -685,13 +687,13 @@ The ₹-impact is shown as a **documented projection, explicitly labelled**, not
 
 ### 13.1 Worked example — how the verifier catches a hidden problem
 
-**`25fv47` (Netlib, 821×1571) — `benchmarks/results/netlib-baseline-p0.csv` (2026-09-21).** The simplex/barrier path fails to reach the published optimum (5501.846) within the 60 s limit, and the artifact records an honest `TIME_LIMIT`, zero certified objective, and `verified: false`:
+**`25fv47` (Netlib, 821×1571) — `benchmarks/results/netlib-baseline-p0.csv` (2026-09-21).** The simplex path fails to reach the published optimum (5501.846) within the 60 s limit, and the artifact records an honest `ITER_LIMIT` (iteration cap), a best objective of 0.0625 that is **not** certified, and `verified: false`:
 
 ```csv
-25fv47,...,TIME_LIMIT,0.0000000000,0.0000000000,0.00000000,60.018992,...,simplex,832,no,...,FAIL,status not optimal; validation skipped
+25fv47,...,ITER_LIMIT,0.0625000000,0.0000000000,0.00000000,60.018507,...,simplex,832,no,...,FAIL,status not optimal; validation skipped
 ```
 
-Because `OPTIMAL` is **only** returned when the independent verifier passes, the solver refuses to certify an optimum it cannot prove — an honest `TIME_LIMIT` is far safer than a silently-wrong `OPTIMAL`. The same design protects `dfl001` (`TIME_LIMIT`, stalled normal equations) and `shell` (verified-optimal but outside 1e-6 reference tolerance, flagged `✗` in §11.2).
+Because `OPTIMAL` is **only** returned when the independent verifier passes, the solver refuses to certify an optimum it cannot prove — an honest `ITER_LIMIT`/`TIME_LIMIT` is far safer than a silently-wrong `OPTIMAL`. The same design protects `dfl001` (`TIME_LIMIT`, stalled normal equations) and `shell` (verified-optimal but outside 1e-6 reference tolerance, flagged `✗` in §11.2).
 
 ---
 
@@ -762,15 +764,16 @@ This section records **honest inconsistencies** between documents and artifacts 
 
 | # | Claim | Evidence that contradicts | Resolution |
 | :--- | :--- | :--- | :--- |
-| 1 | "21/21 Netlib instances solved flawlessly" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`, `IMPLEMENTATION_STATUS.md`) | Fresh re-run 2026-09-21 (`benchmarks/results/netlib-baseline-p0.csv`) = **16/21**; 25fv47/dfl001 TIME_LIMIT, bandm/tuff ITER_LIMIT, shell off-tolerance | **RESOLVED:** claim retired and replaced by the fresh artifact in §11.2 |
+| 1 | "21/21 Netlib instances solved flawlessly" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`, `IMPLEMENTATION_STATUS.md`) | Fresh re-run 2026-09-21 (`benchmarks/results/netlib-baseline-p0.csv`) = **16/21**; dfl001 TIME_LIMIT, 25fv47/bandm/tuff ITER_LIMIT, shell off-tolerance | **RESOLVED:** claim retired and replaced by the fresh artifact in §11.2 |
 | 2 | "cuSPARSE" / "Eigen / CPU multi-threading" in README/doc diagrams | No cuSPARSE/Eigen symbols anywhere; GPU path is custom PTX; CPU path is custom code | Diagrams say "CUDA Driver-API PTX" now (§3/§6) |
 | 3 | `docs/api-reference.md` GPU note: "CUDA/HIP/SYCL backends are not yet implemented" | `core/execution/gpu_backend.cpp` implements a working driver-API backend | Stale — flag or update docs |
 | 4 | `docs/BASELINE.md` says "GPU not implemented"; QPLIB/industrial suites "empty placeholders" | Working CUDA backend + populated suites | Stale document |
 | 5 | "1,000,000-variable problem solved" (`HYPERNOVA_FINAL_SUBMISSION_REPORT.md`) | Shipped scale benchmark evidences up to 100k vars | Doc-only claim; softened in §11.6 |
 | 6 | MIPLIB "solved to optimality" in `BENCHMARK_COMPARISON.md` vs "1/10 PASS" | Fresh re-run 2026-09-21 (`miplib-baseline-p0.csv`) = **1/10** | **RESOLVED:** table in §11.3 now reflects the fresh artifact |
-| 7 | `stair.mps` previously failed (cycling / NUMERICAL_ERROR) in the pre-fix build | After restoring the Bland anti-cycling ratio-tie tolerance (`ratio_tie_tol` = 1e-9 in `core/lp/simplex.cpp`), stair solves **OPTIMAL −251.2670 in 0.41 s** | **RESOLVED:** fresh artifact §11.2, pinned by `test_regression_smoke` |
-| 8 | `mas74` (MIPLIB) | Fresh run reports **INFEASIBLE** (0.13 s) although the published optimum is 11801.186 | **OPEN:** suspected B&B/presolve bug — under investigation; noted in §11.3 |
-| 9 | "6 convex QP models validated" (QPLIB, older README wording) | All 6 shipped QPLIB instances are **MIQP**; convex-QP-only engine → 0/6 TIME_LIMIT | **RESOLVED:** §11.4 corrected; convex-QP evidence moved to MRPL crude-blending QP + QP tests |
+| 7 | `stair.mps` previously failed (cycling / NUMERICAL_ERROR) in the pre-fix build | After restoring the Bland anti-cycling ratio-tie tolerance (`ratio_tie_tol` = 1e-9 in `core/lp/simplex.cpp`), stair solves **OPTIMAL −251.2670 in 0.95 s** | **RESOLVED:** fresh artifact §11.2, pinned by `test_regression_smoke` |
+| 8 | `mas74` (MIPLIB) | Fresh run reports **INFEASIBLE** (0.08 s) although the published optimum is 11801.186 | **OPEN:** suspected B&B/presolve bug — under investigation; noted in §11.3 |
+| 9 | "6 convex QP models validated" (QPLIB, older README wording) | All 6 shipped QPLIB instances are **MIQP**; convex-QP-only engine → 0/6 (3× TIME_LIMIT, 3× root NUMERICAL_ERROR) | **RESOLVED:** §11.4 corrected; convex-QP evidence moved to MRPL crude-blending QP + QP tests |
+| 10 | `gen-ip002` / `mas76` (MIPLIB) | Both solve to **verified OPTIMAL** but objectives diverge from published references (gen-ip002 −4460.40 vs −4783.733; mas76 44048.43 vs 40005.054); `p0201` reaches 7675.0, not the published 7615.0 | **OPEN:** suspected reference/model-sense discrepancy in the shipped `.mps` or reference values — under investigation; noted in §11.3 |
 
 ### Known code artifacts
 
@@ -806,7 +809,7 @@ Advanced cuts (Gomory/MIR/knapsack/clique), heuristic-frequency tuning (RINS / f
 2. **GPU scope** — sparse kernels only; the solver core is not GPU-accelerated; HIP/SYCL not implemented; no toolkit-based cuBLAS/cuSPARSE path
 3. **Nonconvex quadratics** — non-PSD MIQP requires spatial B&B with McCormick envelopes (planned v0.2.0)
 4. **Dense problems** — high-density matrices (>20%) increase IPM normal-equation formation cost; dense Cholesky fallback recommended
-5. **QP IPM bound handling** — bound enforcement within the KKT formulation is a known refinement area (may reach ITER_LIMIT on some bounded QPs)
+5. **QP IPM bound handling** — fixed variables (`lb == ub`) are now modelled as explicit equality rows in the KKT barrier (committed fix), removing the slack-singularity failure; bounded-but-not-fixed range constraints remain a refinement area (may reach ITER_LIMIT on some bounded QPs)
 6. **Modeling language** — no AMPL/GAMS-style DSL in v1 (MPS/LP + C++ API is the boundary)
 7. **SOS constraints** — parsed and round-tripped but not enforced in the engine
 
