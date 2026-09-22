@@ -63,6 +63,9 @@ public:
     SimplexResult solve(const model::Problem& problem);
     SimplexResult solve_with_basis(const model::Problem& problem, const std::vector<int>& var_status, const std::vector<int>& constraint_status = {});
 
+    bool compute_tableau_row(std::size_t basic_var_index_in_basis, std::vector<double>& row_out) const;
+    bool compute_tableau_row_for_var(std::size_t var_index, std::vector<double>& row_out) const;
+
     const SimplexOptions& options() const { return options_; }
     void set_options(const SimplexOptions& opts) { options_ = opts; }
 

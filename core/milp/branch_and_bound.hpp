@@ -123,6 +123,7 @@ struct BnBNode {
     model::ProblemStatus status = model::ProblemStatus::UNKNOWN;
     std::vector<int> basis_var_status;
     std::vector<int> basis_con_status;
+    std::shared_ptr<lp::SimplexSolver> last_lp_solver;
 };
 
 struct BranchAndBoundResult {

@@ -633,3 +633,24 @@ TEST(InteriorPointTest, TimeLimitReportsFiniteIncumbent) {
     }
 }
 
+TEST(SimplexTest, TableauRowExtraction) {
+    ProblemBuilder builder("test_tableau");
+    auto x1 = builder.add_variable(0.0, std::numeric_limits<double>::infinity(), VarType::CONTINUOUS, "x1");
+    auto x2 = builder.add_variable(0.0, std::numeric_limits<double>::infinity(), VarType::CONTINUOUS, "x2");
+    builder.add_constraint({{x1, 1.0}}, ConstraintSense::LE, 4.0, "c1");
+    builder.add_constraint({{x2, 2.0}}, ConstraintSense::LE, 12.0, "c2");
+    builder.add_constraint({{x1, 3.0}, {x2, 2.0}}, ConstraintSense::LE, 18.0, "c3");
+    builder.set_objective({{x1, 3.0}, {x2, 5.0}}, ObjectiveSense::MAXIMIZE);
+    Problem prob = builder.build();
+
+    SimplexSolver solver(ToleranceConfig::industrial_defaults());
+    auto result = solver.solve(prob);
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+
+    std::vector<double> tableau_row;
+    bool ok = solver.compute_tableau_row_for_var(x1, tableau_row);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(tableau_row.size(), 2);
+    EXPECT_NEAR(tableau_row[x1], 1.0, 1e-6);
+    EXPECT_NEAR(tableau_row[x2], 0.0, 1e-6);
+}

@@ -1840,4 +1840,64 @@ model::ProblemStatus SimplexSolver::run_dual_loop() {
     return model::ProblemStatus::ITER_LIMIT;
 }
 
+
+
+bool SimplexSolver::compute_tableau_row(std::size_t basic_var_index_in_basis, std::vector<double>& row_out) const {
+    if (!basis_factorization_ || !problem_) return false;
+    std::size_t m = basis_.size();
+    if (basic_var_index_in_basis >= m) return false;
+
+    std::vector<double> y(m, 0.0);
+    y[basic_var_index_in_basis] = 1.0;
+    
+    // y^T B = e_i^T => B^T y = e_i
+    basis_factorization_->solve_transpose(y);
+
+    std::size_t n_exp = problem_->variables.size();
+    std::vector<double> exp_row(n_exp, 0.0);
+    
+    const auto& A = problem_->constraint_matrix;
+    if (A.order() == numerical::StorageOrder::CSR) {
+        for (std::size_t i = 0; i < m; ++i) {
+            if (std::abs(y[i]) < 1e-12) continue;
+            for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i+1]; ++k) {
+                std::size_t j = A.col_indices()[k];
+                exp_row[j] += y[i] * A.values()[k];
+            }
+        }
+    } else {
+        return false;
+    }
+
+    row_out.assign(n_original_vars_, 0.0);
+    for (std::size_t j = 0; j < n_original_vars_; ++j) {
+        if (free_split_p_.size() > j && free_split_p_[j] >= 0) {
+            row_out[j] = exp_row[free_split_p_[j]];
+        } else if (complement_var_.size() > j && complement_var_[j] >= 0) {
+            double v = exp_row[complement_var_[j]];
+            if (complemented_.size() > static_cast<std::size_t>(complement_var_[j]) && complemented_[complement_var_[j]]) {
+                v = -v;
+            }
+            row_out[j] = -v;
+        } else {
+            double v = exp_row[j];
+            if (complemented_.size() > j && complemented_[j]) {
+                v = -v;
+            }
+            row_out[j] = v;
+        }
+    }
+    return true;
+}
+
+
+bool SimplexSolver::compute_tableau_row_for_var(std::size_t var_index, std::vector<double>& row_out) const {
+    if (!basis_factorization_ || !problem_) return false;
+    for (std::size_t i = 0; i < basis_.size(); ++i) {
+        if (basis_[i] == static_cast<int>(var_index)) {
+            return compute_tableau_row(i, row_out);
+        }
+    }
+    return false;
+}
 } // namespace hypernova::lp

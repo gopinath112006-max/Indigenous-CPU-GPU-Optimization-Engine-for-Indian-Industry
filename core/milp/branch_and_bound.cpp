@@ -35,8 +35,8 @@ BranchAndBoundResult BranchAndBoundSolver::solve(const model::Problem& problem) 
     BranchAndBoundResult result;
 
     if (problem.num_integer_vars() == 0) {
-        lp::SimplexSolver simplex(tol_);
-        auto lp_result = simplex.solve(problem);
+        auto simplex = std::make_shared<lp::SimplexSolver>(tol_);
+        auto lp_result = simplex->solve(problem);
         result.status = lp_result.status;
         result.objective_value = lp_result.objective_value;
         result.primal = lp_result.primal;
@@ -509,12 +509,12 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
             }
             return false;
         };
-        lp::SimplexSolver simplex(tol_, simplex_opts);
+        auto simplex = std::make_shared<lp::SimplexSolver>(tol_, simplex_opts);
         lp::SimplexResult lp_result;
         if (node.lp_solved && !node.basis_var_status.empty()) {
-            lp_result = simplex.solve_with_basis(node_problem, node.basis_var_status, node.basis_con_status);
+            lp_result = simplex->solve_with_basis(node_problem, node.basis_var_status, node.basis_con_status);
         } else {
-            lp_result = simplex.solve(node_problem);
+            lp_result = simplex->solve(node_problem);
         }
         // The interrupt callback aborts with INTERRUPTED; if the global deadline
         // is what tripped it, report the honest TIME_LIMIT status.
@@ -527,6 +527,7 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
                 lp_result.status = model::ProblemStatus::TIME_LIMIT;
             }
         }
+        node.last_lp_solver = simplex;
         relax_status = lp_result.status;
         relax_primal = std::move(lp_result.primal);
         relax_reduced_costs = std::move(lp_result.reduced_costs);
