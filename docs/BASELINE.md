@@ -3,7 +3,14 @@
 Frozen baseline snapshot taken **14 September 2026** before the next major feature phase.
 Platform: Windows 11, MinGW winlibs GCC, C++20, CMake Release (MinGW Makefiles).
 Flags: `-Wall -Wextra -Wpedantic -Werror -fPIC`. Tests: `HYPERNOVA_BUILD_TESTS=ON`, `HYPERNOVA_BUILD_CLI=ON`.
-CUDA/HIP/SYCL backends: OFF.
+CUDA/HIP/SYCL source backends (build-time `HYPERNOVA_ENABLE_*` options): OFF.
+
+> **Historical snapshot notice.** This document is a point-in-time baseline record
+> (**2026-09-14**) and every measurement row is superseded by the shipped artifacts
+> in `benchmarks/results/` and the current numbers in `README.md` §11 (see §16 for
+> retired claims). The GPU row and the "placeholder benchmark suites" item below have
+> been corrected because they misdescribe the code tree; all other rows are frozen as
+> of the snapshot date.
 
 ## Component Status
 
@@ -17,7 +24,7 @@ CUDA/HIP/SYCL backends: OFF.
 | QP – Diagonal QP | PASS | `core/qp/active_set.{hpp,cpp}` and `core/qp/interior_point_qp.{hpp,cpp}`; diagonal-QP tests + CLI smoke tests pass |
 | QP – General QP | LIMITED | Cross-term Q solved on hand-built instances via **sparse KKT** (true symmetric Hessian incl. off-diagonal terms, sparse LU + iterative refinement; `kkt_factorization_` members now hold live factors); `benchmarks/qp_cross.mps` → OPTIMAL −3.0 under both engines; only 2 embedded test instances (weak assertions accept `OPTIMAL || ITER_LIMIT`) |
 | MIQP – Branch & Bound | PASS (convex) | API routes MIQP to B&B with convex QP node relaxations (active-set default; IPM-QP optional, known-unreliable convergence); forced-branching unit + API tests; convex-only, LP-derived cuts/heuristics disabled, sparse KKT per node |
-| GPU | Not implemented | `gpu/` empty; `core/execution/gpu_backend.{hpp,cpp}` is interface + CPU stub; CUDA/HIP/SYCL all OFF |
+| GPU | IMPLEMENTED (kernel scope) | `core/execution/gpu_backend.cpp` is a real **CUDA Driver-API backend** (runtime `LoadLibrary` of `nvcuda.dll`/`libcuda.so.1`, embedded JIT-compiled PTX SpMV/SpMM kernels, `GPUCostModel` dispatch, CPU reference + AUTO backends); `gpu/{hip,sycl}` are empty placeholders (roadmap only). GPU scope is sparse SpMV/SpMM kernels — the solver core stays CPU-driven (README §6) |
 | Parallel B&B | IMPLEMENTED | `core/milp/parallel_branch_and_bound.cpp` + `core/milp/branch_and_bound.{hpp,cpp}`; shared best-bound min-heap + per-worker LIFO warm cache; atomic incumbent/best-bound/cut-pool/pseudocost counters; exclusive node claims; 14/14 ctest pass; verified `--sweep` on `knap_n100` (Release, gap 1e-6): 1t 4.88s/499 nodes → 2t 4.23x → 4t 5.68x → 8t 6.64x (128 nodes; fewer because parallel uses a shared best-bound search with earlier incumbents) |
 
 Engine dispatch (`api/cpp/api.cpp`):
@@ -598,9 +605,8 @@ only tightens the region), so the reported gap is valid. `mas74` now reports a
    1.27 s. shell (rel 1.3e-6) and tuff (rel 6.8e-6) reach verified optima with the IPM path but
    stay just outside the 1e-6 reference tolerance and can flip run-to-run.
 4. **General QP** only exercised on toy instances; embedded QP tests use weak acceptance assertions; the KKT solve is now sparse (LU + refinement) with a true Hessian (cross terms), but no large QP instances exist to validate scaling.
-5. **GPU** is not implemented (options exist but are inert); the parallel B&B (Phase 7) is implemented and does not require a GPU.
-6. Benchmark suites `qplib`, `mittelmann`, `industrial-cases` are placeholders (empty
-   data). **MIPLIB support is prepared**: the harness already loads `.mps`/`.lp` MILPs
+5. **GPU** is **kernel-scoped** — a real CUDA Driver-API backend (JIT PTX SpMV/SpMM) ships behind `ComputeBackendFactory` with a cost model; HIP/SYCL are not implemented and the solver core remains CPU-driven. (Superseded detail in README §6.)
+6. Benchmark suites `qplib`, `mittelmann`, `industrial-cases` were **empty placeholders at this snapshot**; they are populated and measured in the Phase-8/9 artifacts (Sep 21, `benchmarks/results/`, README §11.1/§11.4). **MIPLIB support is prepared**: the harness already loads `.mps`/`.lp` MILPs
    (`Problem::from_mps/from_lp`), runs the `bnb` and `branch-and-cut` engines, and matches
    against a reference CSV; `benchmarks/milp_phase4_knap.lp` is the first shipped MIP-class
    benchmark instance. A larger MIPLIB instance set is not yet shipped.

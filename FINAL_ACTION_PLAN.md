@@ -1,6 +1,11 @@
 # FINAL ACTION PLAN: HyperNova After README Completion
 ## Smart India Hackathon 2026 Submission & Beyond
 
+> **Working-log notice.** This is the historical action plan recorded **2026-09-20**.
+> Numbers quoted below are the values at that date and have since been superseded by
+> the shipped artifacts in `benchmarks/results/` and `README.md` §11/§16 (CTest timing,
+> Netlib statuses/times, QPLIB terminal statuses, MIPLIB gen-ip002/mas76/p0201, etc.).
+
 ---
 
 # ✅ YOUR README IS NOW 92/100 READY
@@ -19,7 +24,7 @@
 - ✅ Sections 11.2-11.7 (Benchmark tables) — filled with real solve times, iterations, gaps from fresh artifacts (`benchmarks/results/*-baseline-p0.{csv,json}`)
 - ✅ Section 12 (MRPL cases) — real outputs shown; all `b1.json`/`sweep_auto.json` references replaced by the fresh evidence artifacts
 - ✅ Demo instructions — every §9 command verified against `build-p0` (crude QP 22,692.12; refinery MILP 2,137,300)
-- ✅ CTest 20/20 PASS (~47 s); benchmark suites regenerated on the shipped binary
+- ✅ CTest 20/20 PASS (current: ~19 min wall in parallel `-j8`, smoke suite 1136 s); benchmark suites regenerated on the shipped binary
 - ✅ Repository cleaned + pushed to GitHub (`origin/main`, public)
 - ✅ Docker build verified end-to-end (server health + in-container CLI solve on Linux)
 
@@ -31,17 +36,17 @@
 
 | Item | Status | Evidence |
 |------|--------|----------|
-| §11.2 Netlib tables with times/iterations | ✅ DONE | `netlib-baseline-p0.{csv,json}` — **16/21** PASS (stair OPTIMAL 0.41 s) |
+| §11.2 Netlib tables with times/iterations | ✅ DONE | `netlib-baseline-p0.{csv,json}` — **16/21** PASS (stair OPTIMAL 0.95 s) |
 | §11.3 MIPLIB honest table | ✅ DONE | `miplib-baseline-p0.{csv,json}` — **1/10** PASS (flugpl); `mas74` INFEASIBLE flagged (Open) |
 | §11.4 QPLIB/Mittelmann corrected | ✅ DONE | `qplib-baseline-p0.{csv,json}` (0/6, MIQP scope honest), `mittelmann-baseline-p0.{csv,json}` (agg PASS) |
 | §11.1 MRPL industrial table | ✅ DONE | `industrial-after-p6.{csv,json}` — crude 22,692.12, 5/5 PASS |
-| §12 MRPL results incl. solve times | ✅ DONE | 0.33 s crude QP; 0.21 ms hydrogen LP; objs corrected to measured values |
-| §13 worked example | ✅ DONE | 25fv47 honest TIME_LIMIT (was NUMERICAL_ERROR narrative) |
+| §12 MRPL results incl. solve times | ✅ DONE | 0.30 s crude QP; 0.19 ms hydrogen LP; objs corrected to measured values |
+| §13 worked example | ✅ DONE | 25fv47 honest ITER_LIMIT 0.0625 (was NUMERICAL_ERROR narrative) |
 | §16 discrepancy table | ✅ DONE | #1/#6/#7/#9 RESOLVED; #8 (mas74) OPEN; #8 vis = suspected B&B bug |
 | ctest 20/20 | ✅ DONE | `ctest` full pass, 2026-09-20 |
 | HiGHS comparison CSV | ✅ DONE | `comparison_highs_hypernova.csv` — 5/5 MRPL Verified=yes; 25fv47 ITER_LIMIT honest |
 | Demo instructions verified | ✅ DONE | crude/refinery/`industrial_demo` all run correctly |
-| Repo clean + pushed | ✅ DONE | `main` tracking `origin/main`; HEAD `6de557a` (public) |
+| Repo clean + pushed | ✅ DONE | `main` tracking `origin/main`; public (HEAD `32e7c68` at last sync) |
 | Docker build test + fix | ✅ DONE | added `.dockerignore`; runner now ships `libhypernova_*.so` (RPATH `/app/build/lib`); in-container solve verified |
 | `STILL OPEN` | ⚠️ | **mas74** false-INFEASIBLE investigation; demo video (optional); pitch slides (optional) |
 

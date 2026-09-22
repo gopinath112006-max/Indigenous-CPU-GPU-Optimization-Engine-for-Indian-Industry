@@ -118,7 +118,7 @@ struct SolverOptions {
     PresolveLevel presolve = AGGRESSIVE;
     ScalingMethod scaling = GEOMETRIC;
     ComputeTarget compute_target = CPU_GPU_AUTO;
-    bool use_gpu = true;                  // currently inert; see note below
+    bool use_gpu = true;                  // false == CPU_ONLY; see GPU note below
     bool heuristic_feasibility_pump = false;
     bool heuristic_rins = false;
     int rins_frequency = 10;
@@ -130,9 +130,14 @@ struct SolverOptions {
 };
 ```
 
-> **GPU note (v0.1.0):** `use_gpu` / `compute_target` are configuration-only.
-> The CUDA/HIP/SYCL backends are not yet implemented; the solver always uses the
-> CPU backend. See `capabilities` in the CLI for the live backend list.
+> **GPU note (v0.1.0):** `compute_target` drives backend selection via
+> `ComputeBackendFactory`. `CPU_ONLY` (or `use_gpu = false`) forces the CPU
+> backend; `CPU_GPU_FORCE` forces CUDA and falls back to CPU when no driver/GPU
+> is available; `CPU_GPU_AUTO` (default) uses the `GPUCostModel`, which offloads
+> to CUDA only when the PTX SpMV/SpMM kernels beat CPU overhead for the matrix
+> size. GPU scope is limited to those sparse kernels — the solver core remains
+> CPU-driven. `Solution::backend_used` records the backend actually used per
+> solve; see `hypernova capabilities` for the live backend list.
 
 ---
 

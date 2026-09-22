@@ -4,6 +4,11 @@
 **Target:** SIH 2026 Problem Statement 26119 (MRPL)  
 **Status:** 🟢 READY FOR FINAL SUBMISSION  
 
+> **Alignment notice.** This report predates the Phase-8/9 benchmark artifacts and has
+> been corrected to match them. Retired claims (1M-variable solve, Netlib 21/21, crude-QP
+> objective −25.0) are removed; current measured state is in `benchmarks/results/` and
+> `README.md` §11/§16.  
+
 ---
 
 ## 1. EXECUTIVE SUMMARY
@@ -21,7 +26,7 @@ HyperNova is a sovereign, from-scratch C++20 mathematical optimization engine bu
 | **Multi-core parallelization** | 🟢 **Satisfied** | `WorkStealingPool` wired into parallel B&B nodes. |
 | **GPU Acceleration** | 🟢 **Satisfied** | `ComputeBackendFactory` integrated. PTX/CUDA SpMV kernels available. |
 | **Numerical robustness & stability** | 🟢 **Satisfied** | Geometric scaling, Mehrotra predictor-corrector, KKT verifier. |
-| **Large-scale industrial problems** | 🟢 **Satisfied** | Scalable to 1,000,000 variables natively in memory. |
+| **Large-scale industrial problems** | 🟢 **Satisfied** | Scaffolded in memory to 100,000-variable LP, solved sub-second; the earlier 1,000,000-variable claim was retired (README §16 #5). |
 | **Compare against established solver** | 🟢 **Satisfied** | `comparison_highs_hypernova.csv` generated vs HiGHS. |
 | **Basic API / CLI** | 🟢 **Satisfied** | Python C-API (ctypes) and native CLI (`hypernova.exe`). |
 
@@ -31,7 +36,7 @@ HyperNova is a sovereign, from-scratch C++20 mathematical optimization engine bu
 The following critical architectural defects were systematically identified and fixed at the source level to achieve production readiness:
 
 1. **GPU Wiring Defect (Fixed):** `SolverOptions::use_gpu` was previously inert. It is now fully wired into `api.cpp` and explicitly triggers the GPU sparse matrix-vector multiplication (`spmv`) in `interior_point.cpp`.
-2. **IPM Accuracy Stalling (Fixed):** The Mehrotra predictor-corrector in the Interior Point solver was missing the curvature correction term (`-dx_aff * dz_aff`). This was mathematically injected, instantly curing the $\mu \approx 10^{-7}$ stalling on Netlib instances (`25fv47`, `shell`, `tuff`).
+2. **IPM Accuracy Stalling (Improved):** The Mehrotra predictor-corrector in the Interior Point solver was missing the curvature correction term (`-dx_aff * dz_aff`). With it injected, barrier convergence improved across Netlib instances — though the shipped artifacts still record honest limits (`25fv47`/`bandm`/`tuff` ITER_LIMIT, `dfl001` TIME_LIMIT, `shell` off 1e-6 tolerance; README §11.2).
 3. **MIPLIB Warm-Start Defect (Fixed):** The `warm_solve` API was silently dropping the `constraint_status` slack basis. Simplex now receives the exact warm basis, drastically accelerating B&B node LP relaxations.
 4. **Parallel B&B Node Stalling (Fixed):** Priority queues (`BEST_ESTIMATE`, `HYBRID`) were not dynamically updating. `set_incumbent()` was wired into the Base NodeSelector, unlocking the true speed of the thread pool.
 5. **Crude Blending / LP Parser (Fixed):** CPLEX LP diagonal scaling was corrected, allowing the MRPL industrial `crude_blending_qp.lp` model to hit a verified OPTIMAL KKT status.
@@ -45,16 +50,16 @@ The following critical architectural defects were systematically identified and 
 ### 4.1 Scalability Stress Test
 * **Model:** Synthetic Sparse LP
 * **Hardware:** Native CPU Execution
-* **Dimensions:** 1,000,000 Variables, 500,000 Constraints
+* **Dimensions:** 100,000 Variables, 50,000 Constraints (evidence up to this size; the 1M claim was retired)
 * **Memory Footprint:** $O(nnz)$ strict linear overhead.
-* **Status:** 🟢 Solved gracefully with interior point engine.
+* **Status:** 🟢 Solved optimally with the interior point engine in ~0.65 s (README §11.6).
 
 ### 4.2 Industrial Cases (MRPL)
-* **Crude Blending QP:** `crude_blending_qp.lp` -> Solved (Objective: -25.0) KKT residual $< 1e^{-6}$.
-* **Refinery Production MILP:** `refinery_production_planning_milp.mps` -> Solved optimally.
+* **Crude Blending QP:** `crude_blending_qp.lp` -> Solved OPTIMAL, objective 22,692.12 ($k/day), verified (KDP residual $< 1e^{-6}$).
+* **Refinery Production MILP:** `refinery_production_planning_milp.mps` -> Solved OPTIMAL, objective 2,137,300.
 
 ### 4.3 Netlib LP Suite
-* 21/21 difficult legacy instances solved flawlessly due to the Mehrotra curvature correction implementation.
+* 21 instances shipped; **17 OPTIMAL / 16 PASS** at 1e-6 reference tolerance — `dfl001` TIME_LIMIT, `25fv47`/`bandm`/`tuff` ITER_LIMIT, `shell` verified-optimal but outside 1e-6. (The earlier "21/21 flawless" claim was retired — README §11.2/§16 #1.)
 
 ### 4.4 External Solver Comparison (HiGHS)
 Reproducible dataset generated via `benchmarks/run_comparison.py` comparing HyperNova explicitly against the open-source HiGHS solver on the same hardware.
