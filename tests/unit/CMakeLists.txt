@@ -104,3 +104,9 @@ setup_test_target(test_rest_system)
 
 
 
+
+add_executable(test_randomized
+    test_randomized.cpp
+)
+target_link_libraries(test_randomized PRIVATE hypernova_api hypernova_milp hypernova_model)
+setup_test_target(test_randomized)
