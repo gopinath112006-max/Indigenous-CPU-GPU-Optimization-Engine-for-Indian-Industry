@@ -1553,8 +1553,10 @@ if (eta_ok) {
     if (!basis_factorization_) return;
 
     if (basis_factorization_->stats().singular) {
-        std::cerr << "BASIS SINGULAR rank=" << basis_factorization_->stats().rank
-                  << " n=" << ncons << "\n";
+        if (prof) {
+            std::cerr << "BASIS SINGULAR rank=" << basis_factorization_->stats().rank
+                      << " n=" << ncons << "\n";
+        }
     }
 
     std::vector<double> b(ncons);
