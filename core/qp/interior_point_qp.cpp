@@ -27,7 +27,7 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
     InteriorPointQPResult result;
     std::size_t nvars = problem.variables.size();
 
-    if (nvars == 0 || (!problem.is_qp() && !problem.is_miqp())) {
+    if (nvars == 0 || (!problem.is_qp() && !problem.is_miqp() && !problem.is_lp())) {
         result.status = model::ProblemStatus::NUMERICAL_ERROR;
         return result;
     }
@@ -60,6 +60,8 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
             return result;
         }
     }
+
+    const std::size_t orig_ncons = minimized.constraints.size();
 
     // Fixed variables (lb == ub) cannot pass through the bound barrier: at a
     // feasible iterate both bound slacks (x - lb) and (ub - x) are zero, so
@@ -148,8 +150,9 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
             double sigma = compute_sigma(mu);
             compute_centering_step(minimized, mu, sigma);
 
-            double alpha_p = STEP_SAFETY * compute_alpha_primal();
-            double alpha_d = STEP_SAFETY * compute_alpha_dual();
+            const double tau = (mu > 0.0) ? std::clamp(1.0 - mu, 0.95, 0.9995) : 1.0;
+            double alpha_p = compute_alpha_primal(tau);
+            double alpha_d = compute_alpha_dual(tau);
 
             if (alpha_p <= 1e-12 && alpha_d <= 1e-12) {
                 ++stall_count;
@@ -184,22 +187,42 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
                                                      : model::ProblemStatus::ITER_LIMIT);
         }
 
+        const auto& A = minimized.constraint_matrix;
+
+        // Compute reduced costs: rc_j = c_j + (Qx)_j + (A^T y)_j
+        result.reduced_costs.assign(nvars, 0.0);
+        for (std::size_t j = 0; j < nvars; ++j) {
+            result.reduced_costs[j] = minimized.variables[j].objective_coeff;
+        }
+        for (const auto& term : minimized.quadratic_terms) {
+            result.reduced_costs[term.row] += term.coeff * x_[term.col];
+            if (term.col != term.row) {
+                result.reduced_costs[term.col] += term.coeff * x_[term.row];
+            }
+        }
+        for (std::size_t i = 0; i < orig_ncons; ++i) {
+            double yi = y_[i];
+            for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+                result.reduced_costs[A.col_indices()[t]] += A.values()[t] * yi;
+            }
+        }
+
         result.primal = x_;
-        result.dual = y_;
+        result.dual.assign(y_.begin(), y_.begin() + orig_ncons);
         result.refinement_sweeps = sweep_total_;
         result.regularization_retries = reg_retries_;
 
-        const auto& A = minimized.constraint_matrix;
-        result.slack.assign(ncons_, 0.0);
-        for (std::size_t i = 0; i < ncons_; ++i) {
+        // Compute slacks for original constraints
+        result.slack.assign(orig_ncons, 0.0);
+        for (std::size_t i = 0; i < orig_ncons; ++i) {
             double sum = 0.0;
             for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
                 sum += A.values()[k] * x_[A.col_indices()[k]];
             }
-            if (minimized.constraints[i].sense == model::ConstraintSense::LE) {
-                result.slack[i] = minimized.constraints[i].rhs - sum;
-            } else if (minimized.constraints[i].sense == model::ConstraintSense::GE) {
-                result.slack[i] = sum - minimized.constraints[i].rhs;
+            if (problem.constraints[i].sense == model::ConstraintSense::LE) {
+                result.slack[i] = problem.constraints[i].rhs - sum;
+            } else if (problem.constraints[i].sense == model::ConstraintSense::GE) {
+                result.slack[i] = sum - problem.constraints[i].rhs;
             }
         }
 
@@ -219,6 +242,54 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
         if (negate) {
             result.objective_value = -result.objective_value;
             for (auto& l : result.dual) l = -l;
+            for (auto& rc : result.reduced_costs) rc = -rc;
+        }
+
+        // Final independent solution validation (Section 13)
+        double max_bnd_viol = 0.0;
+        bool numerical_ok = true;
+        for (std::size_t j = 0; j < nvars; ++j) {
+            if (!std::isfinite(result.primal[j])) {
+                numerical_ok = false;
+                break;
+            }
+            double lb = problem.variables[j].lower_bound;
+            double ub = problem.variables[j].upper_bound;
+            if (lb > -INF && result.primal[j] < lb - tol_.feasibility_tol()) {
+                max_bnd_viol = std::max(max_bnd_viol, lb - result.primal[j]);
+            }
+            if (ub < INF && result.primal[j] > ub + tol_.feasibility_tol()) {
+                max_bnd_viol = std::max(max_bnd_viol, result.primal[j] - ub);
+            }
+        }
+        result.max_bound_violation = max_bnd_viol;
+
+        if (!numerical_ok || !std::isfinite(result.objective_value)) {
+            result.status = model::ProblemStatus::NUMERICAL_ERROR;
+        } else if (result.status == model::ProblemStatus::OPTIMAL) {
+            if (max_bnd_viol > tol_.feasibility_tol()) {
+                result.status = model::ProblemStatus::SUBOPTIMAL;
+            } else {
+                double max_con_viol = 0.0;
+                for (std::size_t i = 0; i < orig_ncons; ++i) {
+                    double act = 0.0;
+                    for (std::size_t k = A.row_ptr()[i]; k < A.row_ptr()[i + 1]; ++k) {
+                        act += A.values()[k] * result.primal[A.col_indices()[k]];
+                    }
+                    double rhs = problem.constraints[i].rhs;
+                    if (problem.constraints[i].sense == model::ConstraintSense::LE && act > rhs + tol_.feasibility_tol()) {
+                        max_con_viol = std::max(max_con_viol, act - rhs);
+                    } else if (problem.constraints[i].sense == model::ConstraintSense::GE && act < rhs - tol_.feasibility_tol()) {
+                        max_con_viol = std::max(max_con_viol, rhs - act);
+                    } else if (problem.constraints[i].sense == model::ConstraintSense::EQ && std::abs(act - rhs) > tol_.feasibility_tol()) {
+                        max_con_viol = std::max(max_con_viol, std::abs(act - rhs));
+                    }
+                }
+                result.primal_residual = std::max(max_bnd_viol, max_con_viol);
+                if (max_con_viol > tol_.feasibility_tol()) {
+                    result.status = model::ProblemStatus::SUBOPTIMAL;
+                }
+            }
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -276,20 +347,26 @@ void InteriorPointQPSolver::initialize(const model::Problem& problem) {
     }
     n_ineq_ = ineq_row_.size();
 
-    x_.assign(nvars_, 1.0);
+    x_.assign(nvars_, 0.0);
     for (std::size_t j = 0; j < nvars_; ++j) {
         double lb = problem.variables[j].lower_bound;
         double ub = problem.variables[j].upper_bound;
-        double xj = 1.0;
+        double xj = 0.0;
         if (lb > -INF && ub < INF) {
             xj = (lb + ub) / 2.0;
         } else if (lb > -INF) {
-            xj = lb + 1.0;
+            xj = lb + std::max(1.0, 0.1 * std::abs(lb));
         } else if (ub < INF) {
-            xj = ub - 1.0;
+            xj = ub - std::max(1.0, 0.1 * std::abs(ub));
+        } else {
+            xj = 0.0;
         }
-        if (lb > -INF && ub < INF && ub - lb < 0.1) {
-            xj = (lb + ub) / 2.0;
+        if (lb > -INF && ub < INF) {
+            if (ub - lb > 2e-4) {
+                xj = std::clamp(xj, lb + 1e-4, ub - 1e-4);
+            } else {
+                xj = (lb + ub) / 2.0;
+            }
         } else {
             if (lb > -INF) xj = std::max(xj, lb + 1e-4);
             if (ub < INF) xj = std::min(xj, ub - 1e-4);
@@ -304,27 +381,27 @@ void InteriorPointQPSolver::initialize(const model::Problem& problem) {
     lambdau_.assign(n_ub_, 1.0);
     lambdag_.assign(n_ineq_, 1.0);
 
+    // Initial objective gradient to scale dual variables
+    std::vector<double> grad0(nvars_, 0.0);
+    for (std::size_t j = 0; j < nvars_; ++j) {
+        grad0[j] = problem.variables[j].objective_coeff;
+    }
+    for (const auto& term : problem.quadratic_terms) {
+        grad0[term.row] += term.coeff * x_[term.col];
+        if (term.col != term.row) grad0[term.col] += term.coeff * x_[term.row];
+    }
+
     for (std::size_t l = 0; l < n_lb_; ++l) {
         std::size_t j = lb_var_[l];
-        double ub = problem.variables[j].upper_bound;
-        double lb = lb_val_[l];
-        double s = x_[j] - lb;
-        if (ub < INF && ub - lb < 0.1) {
-            sl_[l] = std::min((ub - lb) / 4.0, 1.0);
-        } else {
-            sl_[l] = std::max(s, MIN_BARRIER_VALUE);
-        }
+        double s = x_[j] - lb_val_[l];
+        sl_[l] = std::max(s, MIN_BARRIER_VALUE);
+        lambdal_[l] = std::max(1.0, grad0[j] > 0.0 ? grad0[j] : 1.0);
     }
     for (std::size_t u = 0; u < n_ub_; ++u) {
         std::size_t j = ub_var_[u];
-        double lb = problem.variables[j].lower_bound;
-        double ub = ub_val_[u];
-        double s = ub - x_[j];
-        if (lb > -INF && ub - lb < 0.1) {
-            su_[u] = std::min((ub - lb) / 4.0, 1.0);
-        } else {
-            su_[u] = std::max(s, MIN_BARRIER_VALUE);
-        }
+        double s = ub_val_[u] - x_[j];
+        su_[u] = std::max(s, MIN_BARRIER_VALUE);
+        lambdau_[u] = std::max(1.0, grad0[j] < 0.0 ? -grad0[j] : 1.0);
     }
     const auto& A = problem.constraint_matrix;
     for (std::size_t k = 0; k < n_ineq_; ++k) {
@@ -678,28 +755,48 @@ void InteriorPointQPSolver::compute_centering_step(const model::Problem& problem
 double InteriorPointQPSolver::compute_alpha_pair(const std::vector<double>& vals, const std::vector<double>& dirs) const {
     double alpha = 1.0;
     for (std::size_t i = 0; i < vals.size(); ++i) {
-        if (dirs[i] < 0.0) {
-            double ratio = (vals[i] > 0.0) ? -vals[i] / dirs[i] : 0.0;
+        if (dirs[i] < -1e-15) {
+            double v = std::max(vals[i], 1e-15);
+            double ratio = -v / dirs[i];
             alpha = std::min(alpha, ratio);
         }
     }
     return alpha;
 }
 
-double InteriorPointQPSolver::compute_alpha_primal() const {
+double InteriorPointQPSolver::compute_alpha_primal(double tau) const {
     double alpha = 1.0;
     alpha = std::min(alpha, compute_alpha_pair(sl_, dsl_));
     alpha = std::min(alpha, compute_alpha_pair(su_, dsu_));
     alpha = std::min(alpha, compute_alpha_pair(g_, dg_));
-    return std::min(1.0, 0.995 * alpha);
+
+    // Directly protect x_ against stepping across finite lower and upper bounds
+    for (std::size_t l = 0; l < n_lb_; ++l) {
+        std::size_t j = lb_var_[l];
+        if (dx_[j] < -1e-15) {
+            double dist = std::max(x_[j] - lb_val_[l], 1e-15);
+            alpha = std::min(alpha, dist / (-dx_[j]));
+        }
+    }
+    for (std::size_t u = 0; u < n_ub_; ++u) {
+        std::size_t j = ub_var_[u];
+        if (dx_[j] > 1e-15) {
+            double dist = std::max(ub_val_[u] - x_[j], 1e-15);
+            alpha = std::min(alpha, dist / dx_[j]);
+        }
+    }
+
+    if (comp_count() == 0) return 1.0;
+    return std::min(1.0, tau * alpha);
 }
 
-double InteriorPointQPSolver::compute_alpha_dual() const {
+double InteriorPointQPSolver::compute_alpha_dual(double tau) const {
     double alpha = 1.0;
     alpha = std::min(alpha, compute_alpha_pair(lambdal_, dlambdal_));
     alpha = std::min(alpha, compute_alpha_pair(lambdau_, dlambdau_));
     alpha = std::min(alpha, compute_alpha_pair(lambdag_, dlambdag_));
-    return std::min(1.0, 0.995 * alpha);
+    if (comp_count() == 0) return 1.0;
+    return std::min(1.0, tau * alpha);
 }
 
 void InteriorPointQPSolver::update_variables(double alpha_p, double alpha_d) {
@@ -708,24 +805,30 @@ void InteriorPointQPSolver::update_variables(double alpha_p, double alpha_d) {
     }
     for (std::size_t l = 0; l < sl_.size(); ++l) {
         sl_[l] += alpha_p * dsl_[l];
+        if (sl_[l] < 1e-14) sl_[l] = 1e-14;
     }
     for (std::size_t u = 0; u < su_.size(); ++u) {
         su_[u] += alpha_p * dsu_[u];
+        if (su_[u] < 1e-14) su_[u] = 1e-14;
     }
     for (std::size_t g = 0; g < g_.size(); ++g) {
         g_[g] += alpha_p * dg_[g];
+        if (g_[g] < 1e-14) g_[g] = 1e-14;
     }
     for (std::size_t i = 0; i < y_.size(); ++i) {
         y_[i] += alpha_d * dy_[i];
     }
     for (std::size_t l = 0; l < lambdal_.size(); ++l) {
         lambdal_[l] += alpha_d * dlambdal_[l];
+        if (lambdal_[l] < 1e-14) lambdal_[l] = 1e-14;
     }
     for (std::size_t u = 0; u < lambdau_.size(); ++u) {
         lambdau_[u] += alpha_d * dlambdau_[u];
+        if (lambdau_[u] < 1e-14) lambdau_[u] = 1e-14;
     }
     for (std::size_t g = 0; g < lambdag_.size(); ++g) {
         lambdag_[g] += alpha_d * dlambdag_[g];
+        if (lambdag_[g] < 1e-14) lambdag_[g] = 1e-14;
     }
 }
 
@@ -761,12 +864,18 @@ bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, dou
     }
 
     std::vector<double> grad(n, 0.0);
+    double max_obj_scale = 1.0;
     for (std::size_t j = 0; j < n; ++j) {
         grad[j] = problem.variables[j].objective_coeff;
+        max_obj_scale = std::max(max_obj_scale, std::abs(grad[j]));
     }
     for (const auto& term : problem.quadratic_terms) {
         grad[term.row] += term.coeff * x_[term.col];
         if (term.col != term.row) grad[term.col] += term.coeff * x_[term.row];
+        max_obj_scale = std::max(max_obj_scale, std::abs(term.coeff));
+    }
+    for (std::size_t j = 0; j < n; ++j) {
+        max_obj_scale = std::max(max_obj_scale, std::abs(grad[j]));
     }
     for (std::size_t i = 0; i < nc; ++i) {
         double yi = y_[i];
@@ -786,10 +895,15 @@ bool InteriorPointQPSolver::check_convergence(const model::Problem& problem, dou
         comp_res = std::max(comp_res, g_[k] * lambdag_[k]);
     }
 
-    return primal_res < options_.convergence_tol &&
-           dual_res < options_.convergence_tol &&
-           mu < options_.complementarity_tol &&
-           comp_res < options_.convergence_tol;
+    const double tol_p = options_.convergence_tol;
+    const double tol_d = options_.convergence_tol * max_obj_scale;
+    const double tol_mu = options_.complementarity_tol * max_obj_scale;
+    const double tol_comp = options_.convergence_tol * max_obj_scale;
+
+    return primal_res < tol_p &&
+           dual_res < tol_d &&
+           mu < tol_mu &&
+           comp_res < tol_comp;
 }
 
 } // namespace hypernova::qp

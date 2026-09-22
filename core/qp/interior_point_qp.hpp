@@ -41,6 +41,13 @@ struct InteriorPointQPResult {
     // Number of times the regularization was bumped because the KKT solve was
     // singular or the residual was not reduced.
     std::size_t regularization_retries = 0;
+    // Multipliers for variable bounds / reduced costs
+    std::vector<double> reduced_costs;
+    // Diagnostic residuals for validation and reporting
+    double primal_residual = 0.0;
+    double dual_residual = 0.0;
+    double complementarity_residual = 0.0;
+    double max_bound_violation = 0.0;
 };
 
 // Primal-dual interior-point solver for convex QPs with a fully bound-aware
@@ -105,8 +112,8 @@ private:
     void unpack_directions(const std::vector<double>& sol);
     void compute_affine_step(const model::Problem& problem);
     void compute_centering_step(const model::Problem& problem, double mu, double sigma);
-    double compute_alpha_primal() const;
-    double compute_alpha_dual() const;
+    double compute_alpha_primal(double tau) const;
+    double compute_alpha_dual(double tau) const;
     double compute_alpha_pair(const std::vector<double>& vals, const std::vector<double>& dirs) const;
     double kkt_relative_residual(const std::vector<double>& sol, const std::vector<double>& rhs) const;
     void update_variables(double alpha_p, double alpha_d);

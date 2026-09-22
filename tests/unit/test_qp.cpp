@@ -1022,3 +1022,515 @@ TEST(P6NumericTest, IllConditionedSolvesWithRegularization) {
     EXPECT_NEAR(ipm_r.objective_value, -500050.0, 1e-1);
     EXPECT_LE(ipm_r.regularization_retries, 100u);
 }
+
+namespace {
+
+void verify_phase1_qp_solution(const Problem& prob, const InteriorPointQPResult& result,
+                                double tol = 1e-3) {
+    ASSERT_EQ(result.status, ProblemStatus::OPTIMAL);
+    ASSERT_EQ(result.primal.size(), prob.variables.size());
+
+    // 1. Verify variable bounds
+    for (std::size_t j = 0; j < prob.variables.size(); ++j) {
+        double val = result.primal[j];
+        ASSERT_TRUE(std::isfinite(val)) << "Var " << j << " is not finite";
+        double lb = prob.variables[j].lower_bound;
+        double ub = prob.variables[j].upper_bound;
+        if (std::isfinite(lb)) {
+            EXPECT_GE(val, lb - tol) << "Lower bound violated at var " << j << " (val=" << val << ", lb=" << lb << ")";
+        }
+        if (std::isfinite(ub)) {
+            EXPECT_LE(val, ub + tol) << "Upper bound violated at var " << j << " (val=" << val << ", ub=" << ub << ")";
+        }
+    }
+
+    // 2. Verify constraints
+    const auto& A = prob.constraint_matrix;
+    for (std::size_t i = 0; i < prob.constraints.size(); ++i) {
+        double activity = 0.0;
+        for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+            activity += A.values()[t] * result.primal[A.col_indices()[t]];
+        }
+        double rhs = prob.constraints[i].rhs;
+        if (prob.constraints[i].sense == ConstraintSense::LE) {
+            EXPECT_LE(activity, rhs + tol) << "LE constraint " << i << " violated";
+        } else if (prob.constraints[i].sense == ConstraintSense::GE) {
+            EXPECT_GE(activity, rhs - tol) << "GE constraint " << i << " violated";
+        } else if (prob.constraints[i].sense == ConstraintSense::EQ) {
+            EXPECT_NEAR(activity, rhs, tol) << "EQ constraint " << i << " violated";
+        }
+    }
+
+    // 3. Independently compute objective (Section 19)
+    double expected_obj = prob.obj_offset;
+    for (std::size_t j = 0; j < prob.variables.size(); ++j) {
+        expected_obj += prob.variables[j].objective_coeff * result.primal[j];
+    }
+    for (const auto& term : prob.quadratic_terms) {
+        if (term.row == term.col) {
+            expected_obj += 0.5 * term.coeff * result.primal[term.row] * result.primal[term.col];
+        } else {
+            expected_obj += term.coeff * result.primal[term.row] * result.primal[term.col];
+        }
+    }
+
+    // 4. Compare solver objective to independently calculated objective
+    EXPECT_NEAR(result.objective_value, expected_obj, tol);
+}
+
+} // namespace
+
+// =============================================================================
+// PHASE 1 — SECTION 14: SPECIAL CASES THAT MUST WORK
+// =============================================================================
+
+TEST(Phase1BoundSpecialCases, Test1_LowerBoundOnly) {
+    // min 0.5 * x^2, s.t. x >= 5. Unconstrained optimum is 0 -> bound enforced at 5.
+    ProblemBuilder builder("test1_lb");
+    builder.add_variable(5.0, std::numeric_limits<double>::infinity(), VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 5.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 12.5, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test2_UpperBoundOnly) {
+    // min -x, s.t. x <= 3. Expected x = 3, obj = -3.
+    ProblemBuilder builder("test2_ub");
+    builder.add_variable(-std::numeric_limits<double>::infinity(), 3.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 0.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -3.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test3_TwoSidedBound) {
+    // min (x - 10)^2 = 0.5 * 2 * x^2 - 20*x + 100, s.t. 2 <= x <= 5. Expected x = 5, obj = 25.
+    ProblemBuilder builder("test3_two_sided");
+    builder.add_variable(2.0, 5.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -20.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 100.0;
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 5.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 25.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test4_InteriorOptimum) {
+    // min (x - 3)^2 = 0.5 * 2 * x^2 - 6*x + 9, s.t. 0 <= x <= 10. Expected x = 3, obj = 0.
+    ProblemBuilder builder("test4_interior");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -6.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 9.0;
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 0.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test5_MultipleVariables) {
+    // Convex QP with 3 variables:
+    // min (x0 - 1)^2 + (x1 - 10)^2 + (x2 - 5)^2
+    // with 3 <= x0 <= 10 (hits LB 3), 0 <= x1 <= 7 (hits UB 7), 0 <= x2 <= 10 (interior 5)
+    ProblemBuilder builder("test5_multi");
+    builder.add_variable(3.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 7.0, VarType::CONTINUOUS, "x1");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x2");
+    builder.set_objective({{0, -2.0}, {1, -20.0}, {2, -10.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    builder.add_quadratic_term(2, 2, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 1.0 + 100.0 + 25.0; // 126
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 7.0, 1e-4);
+    EXPECT_NEAR(result.primal[2], 5.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 13.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test6_EqualityAndBounds) {
+    // min 0.5 * (x0^2 + x1^2) - 10*x0, s.t. x0 + x1 = 10, 0 <= x0 <= 8, 0 <= x1 <= 8.
+    // Unconstrained minimum of x0 in x0 + x1 = 10 is x0 = 10, clamped by x0 <= 8 to x0 = 8, x1 = 2.
+    // obj = 0.5 * (64 + 4) - 80 = 34 - 80 = -46.
+    ProblemBuilder builder("test6_eq_bnd");
+    builder.add_variable(0.0, 8.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 8.0, VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::EQ, 10.0, "eq");
+    builder.set_objective({{0, -10.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 8.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 2.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -46.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test7_InequalityAndBounds) {
+    // min 0.5 * (x0^2 + x1^2) - 4*x0 - 4*x1, s.t. x0 + x1 <= 3, 0 <= x0 <= 2, 0 <= x1 <= 2.
+    // Optimum at x0 = 1.5, x1 = 1.5, obj = 0.5*(2.25+2.25) - 6 - 6 = 2.25 - 12 = -9.75.
+    ProblemBuilder builder("test7_ineq_bnd");
+    builder.add_variable(0.0, 2.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 2.0, VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::LE, 3.0, "c1");
+    builder.set_objective({{0, -4.0}, {1, -4.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 1.5, 1e-4);
+    EXPECT_NEAR(result.primal[1], 1.5, 1e-4);
+    EXPECT_NEAR(result.objective_value, -9.75, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test8_FreeVariable) {
+    // Free variable: l = -inf, u = +inf.
+    // min 0.5 * x^2 - 3*x. Optimum x = 3, obj = -4.5.
+    const double INF_VAL = std::numeric_limits<double>::infinity();
+    ProblemBuilder builder("test8_free");
+    builder.add_variable(-INF_VAL, INF_VAL, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -3.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -4.5, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test9_LowerBoundedVariable) {
+    // Lower bounded variable only: l = 2, u = +inf.
+    // min 0.5 * x^2 - x. Unconstrained optimum is 1, clamped at lb=2.
+    // obj = 0.5*4 - 2 = 0.
+    const double INF_VAL = std::numeric_limits<double>::infinity();
+    ProblemBuilder builder("test9_lb");
+    builder.add_variable(2.0, INF_VAL, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 0.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test10_UpperBoundedVariable) {
+    // Upper bounded variable only: l = -inf, u = 4.
+    // min 0.5 * x^2 - 6*x. Unconstrained optimum is 6, clamped at ub=4.
+    // obj = 0.5*16 - 24 = -16.
+    const double INF_VAL = std::numeric_limits<double>::infinity();
+    ProblemBuilder builder("test10_ub");
+    builder.add_variable(-INF_VAL, 4.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -6.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 4.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -16.0, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test11_BothBounds) {
+    // Both bounds: 1 <= x <= 5.
+    // min 0.5 * x^2 - 10*x. Unconstrained optimum is 10, clamped at ub=5.
+    // obj = 0.5*25 - 50 = -37.5.
+    ProblemBuilder builder("test11_both");
+    builder.add_variable(1.0, 5.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -10.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 5.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, -37.5, 1e-4);
+}
+
+TEST(Phase1BoundSpecialCases, Test12_FixedVariable) {
+    // Fixed variable: l_i = u_i = 3.0.
+    // min (x0 - 5)^2 + (x1 - 2)^2 with x0 in [3, 3], x1 in [0, 10].
+    // Optimum: x0 = 3, x1 = 2, obj = (3-5)^2 + 0 = 4.
+    ProblemBuilder builder("test12_fixed");
+    builder.add_variable(3.0, 3.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -10.0}, {1, -4.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 25.0 + 4.0; // 29
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 2.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 4.0, 1e-4);
+}
+
+// =============================================================================
+// PHASE 1 — SECTION 15: EDGE CASES
+// =============================================================================
+
+TEST(Phase1EdgeCases, VerySmallBounds) {
+    // 1e-6 <= x <= 2e-6, min 0.5 * x^2
+    ProblemBuilder builder("small_bnd");
+    builder.add_variable(1e-6, 2e-6, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result, 1e-5);
+    EXPECT_GE(result.primal[0], 1e-6 - 1e-8);
+    EXPECT_LE(result.primal[0], 2e-6 + 1e-8);
+    EXPECT_NEAR(result.primal[0], 1e-6, 1e-5);
+}
+
+TEST(Phase1EdgeCases, LargeBounds) {
+    // 1e5 <= x <= 1e6, min 0.5 * x^2
+    ProblemBuilder builder("large_bnd");
+    builder.add_variable(1e5, 1e6, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result, 1.0);
+    EXPECT_NEAR(result.primal[0], 1e5, 1.0);
+}
+
+TEST(Phase1EdgeCases, NegativeBounds) {
+    // -10 <= x <= -4, min 0.5 * x^2. Optimum is at x = -4, obj = 8.
+    ProblemBuilder builder("neg_bnd");
+    builder.add_variable(-10.0, -4.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], -4.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 8.0, 1e-4);
+}
+
+TEST(Phase1EdgeCases, ZeroBounds) {
+    // 0 <= x <= 0, min x^2 + 2*x. Optimum x = 0, obj = 0.
+    ProblemBuilder builder("zero_bnd");
+    builder.add_variable(0.0, 0.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, 2.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 0.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 0.0, 1e-4);
+}
+
+TEST(Phase1EdgeCases, MixedPositiveNegativeBounds) {
+    // -5 <= x0 <= -1, 2 <= x1 <= 10, min 0.5 * (x0^2 + x1^2).
+    // Optimum at x0 = -1, x1 = 2, obj = 0.5*(1 + 4) = 2.5.
+    ProblemBuilder builder("mixed_signs");
+    builder.add_variable(-5.0, -1.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(2.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 0.0}, {1, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], -1.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 2.0, 1e-4);
+    EXPECT_NEAR(result.objective_value, 2.5, 1e-4);
+}
+
+TEST(Phase1EdgeCases, OptimumAtBound) {
+    // min (x - 3)^2, s.t. 0 <= x <= 3. Optimum exactly at the upper bound 3.
+    ProblemBuilder builder("opt_at_bnd");
+    builder.add_variable(0.0, 3.0, VarType::CONTINUOUS, "x");
+    builder.set_objective({{0, -6.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 9.0;
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 3.0, 5e-4);
+    EXPECT_NEAR(result.objective_value, 0.0, 1e-4);
+}
+
+TEST(Phase1EdgeCases, SparseHessian) {
+    // Tridiagonal Hessian QP with bounds
+    // min 0.5 * x^T Q x - e^T x with Q tridiagonal: diag=4, sub/super=1
+    // x in [0, 2]^4.
+    ProblemBuilder builder("tridiag");
+    for (int i = 0; i < 4; ++i) {
+        builder.add_variable(0.0, 2.0, VarType::CONTINUOUS, "x" + std::to_string(i));
+        builder.add_quadratic_term(i, i, 4.0);
+    }
+    for (int i = 0; i < 3; ++i) {
+        builder.add_quadratic_term(i, i + 1, 1.0);
+    }
+    builder.set_objective({{0, -1.0}, {1, -1.0}, {2, -1.0}, {3, -1.0}}, ObjectiveSense::MINIMIZE);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+}
+
+TEST(Phase1EdgeCases, DiagonalHessian) {
+    // Diagonal Hessian with unequal scaling: diag = (1, 10, 100)
+    // min 0.5*(x0^2 + 10*x1^2 + 100*x2^2) - 2*x0 - 20*x1 - 200*x2
+    // Unconstrained minimum: x0 = 2, x1 = 2, x2 = 2.
+    // Bounds: 0 <= x0 <= 1 (hits UB 1), 0 <= x1 <= 5 (interior 2), 3 <= x2 <= 10 (hits LB 3)
+    ProblemBuilder builder("diag_scale");
+    builder.add_variable(0.0, 1.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.add_variable(3.0, 10.0, VarType::CONTINUOUS, "x2");
+    builder.set_objective({{0, -2.0}, {1, -20.0}, {2, -200.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 10.0);
+    builder.add_quadratic_term(2, 2, 100.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 2.0, 1e-4);
+    EXPECT_NEAR(result.primal[2], 3.0, 1e-4);
+}
+
+TEST(Phase1EdgeCases, DenseSmallHessian) {
+    // 3x3 positive definite dense matrix
+    // Q = [[4, 1, 1], [1, 4, 1], [1, 1, 4]]
+    // min 0.5 * x^T Q x - e^T x, with 0 <= x_i <= 1
+    // Unconstrained: Q * x = e -> x_i = 1 / (4 + 1 + 1) = 1/6 ~ 0.166667
+    ProblemBuilder builder("dense_small");
+    for (int i = 0; i < 3; ++i) {
+        builder.add_variable(0.0, 1.0, VarType::CONTINUOUS, "x" + std::to_string(i));
+        builder.add_quadratic_term(i, i, 4.0);
+    }
+    builder.add_quadratic_term(0, 1, 1.0);
+    builder.add_quadratic_term(0, 2, 1.0);
+    builder.add_quadratic_term(1, 2, 1.0);
+    builder.set_objective({{0, -1.0}, {1, -1.0}, {2, -1.0}}, ObjectiveSense::MINIMIZE);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_NEAR(result.primal[i], 1.0 / 6.0, 1e-4);
+    }
+}
+
+TEST(Phase1EdgeCases, UnconstrainedQP) {
+    // 3 free variables: min 0.5 * (x0^2 + x1^2 + x2^2) - x0 - 2*x1 - 3*x2
+    const double INF_VAL = std::numeric_limits<double>::infinity();
+    ProblemBuilder builder("unconstrained");
+    builder.add_variable(-INF_VAL, INF_VAL, VarType::CONTINUOUS, "x0");
+    builder.add_variable(-INF_VAL, INF_VAL, VarType::CONTINUOUS, "x1");
+    builder.add_variable(-INF_VAL, INF_VAL, VarType::CONTINUOUS, "x2");
+    builder.set_objective({{0, -1.0}, {1, -2.0}, {2, -3.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    builder.add_quadratic_term(2, 2, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 2.0, 1e-4);
+    EXPECT_NEAR(result.primal[2], 3.0, 1e-4);
+}
+
+TEST(Phase1EdgeCases, RedundantConstraints) {
+    // Redundant constraints: x0 + x1 <= 10, x0 + x1 <= 20
+    // min 0.5 * (x0^2 + x1^2) - 8*x0 - 8*x1, 0 <= x0 <= 5, 0 <= x1 <= 5
+    // Unconstrained min is (8, 8). With bounds [0, 5], clamped to (5, 5).
+    // Activity = 10, which satisfies <= 10 and <= 20.
+    ProblemBuilder builder("redundant");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::LE, 10.0, "c1");
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, ConstraintSense::LE, 20.0, "c2");
+    builder.set_objective({{0, -8.0}, {1, -8.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 1.0);
+    builder.add_quadratic_term(1, 1, 1.0);
+    Problem prob = builder.build();
+
+    InteriorPointQPSolver solver;
+    auto result = solver.solve(prob);
+
+    verify_phase1_qp_solution(prob, result);
+    EXPECT_NEAR(result.primal[0], 5.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 5.0, 1e-4);
+}
+
