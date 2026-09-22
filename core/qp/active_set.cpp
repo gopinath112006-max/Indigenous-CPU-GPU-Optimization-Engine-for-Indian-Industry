@@ -38,10 +38,14 @@ ActiveSetResult ActiveSetQPSolver::solve(const model::Problem& problem) {
     }
 
     if (options_.check_convexity) {
-        last_convexity_ = classify_qp_convexity(minimized, tol_);
+        result.convexity_diagnostics = diagnose_qp_convexity(minimized, tol_);
+        last_convexity_ = result.convexity_diagnostics.classification;
         result.convexity = last_convexity_;
-        if (last_convexity_ == ConvexityClassification::NONCONVEX) {
+        if (last_convexity_ == ConvexityClassification::NONCONVEX ||
+            last_convexity_ == ConvexityClassification::ASYMMETRIC ||
+            last_convexity_ == ConvexityClassification::CONVEX_OUTSIDE_SCOPE) {
             result.status = model::ProblemStatus::NUMERICAL_ERROR;
+            result.rejection_reason = result.convexity_diagnostics.rejection_reason;
             return result;
         }
     }

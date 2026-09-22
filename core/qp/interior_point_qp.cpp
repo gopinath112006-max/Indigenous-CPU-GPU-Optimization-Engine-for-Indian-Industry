@@ -47,9 +47,13 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
     }
 
     if (options_.check_convexity) {
-        result.convexity = classify_qp_convexity(minimized, tol_);
-        if (result.convexity == ConvexityClassification::NONCONVEX) {
+        result.convexity_diagnostics = diagnose_qp_convexity(minimized, tol_);
+        result.convexity = result.convexity_diagnostics.classification;
+        if (result.convexity == ConvexityClassification::NONCONVEX ||
+            result.convexity == ConvexityClassification::ASYMMETRIC ||
+            result.convexity == ConvexityClassification::CONVEX_OUTSIDE_SCOPE) {
             result.status = model::ProblemStatus::NUMERICAL_ERROR;
+            result.rejection_reason = result.convexity_diagnostics.rejection_reason;
             return result;
         }
     }

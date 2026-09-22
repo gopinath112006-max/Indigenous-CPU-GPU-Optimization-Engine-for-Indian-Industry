@@ -3,34 +3,39 @@
 #include "../model/problem.hpp"
 #include "../numerical/tolerance.hpp"
 #include <cstddef>
+#include <string>
 
 namespace hypernova::qp {
 
-// Classification of a QP objective's Hessian.
+// Classification of a QP objective's Hessian conforming to the Convexity Scope Specification.
 enum class ConvexityClassification {
     UNKNOWN,                // no quadratic objective (linear program), or factorization unavailable
-    CONVEX,                 // all pivots well above the singular tolerance
-    NUMERICALLY_UNCERTAIN,  // near-singular / PSD-to-roundoff: no definite negative
-                            // pivot at the baseline, but a pivot that is zero to
-                            // numerical precision (the KKT may be ill-conditioned)
-    NONCONVEX,              // a definite negative pivot (indefinite Hessian)
+    CONVEX,                 // strictly convex / positive-definite (all pivots well above singular tolerance)
+    NUMERICALLY_UNCERTAIN,  // numerically ambiguous / near-singular PSD within tolerance (supported with regularization)
+    NONCONVEX,              // materially indefinite or negative definite (unsupported)
+    CONVEX_OUTSIDE_SCOPE,   // convex mathematically but outside current supported model class (e.g. invalid dimensions)
+    ASYMMETRIC              // significantly asymmetric Hessian exceeding symmetry tolerance (invalid)
 };
 
-// Classifies the symmetric Hessian Q implied by `problem.quadratic_terms`.
-//
-// Convention: the objective is  1/2 x^T Q x + c^T x   with  Q_ii = stored
-// diagonal term and  Q_ij = Q_ji = stored cross term (the cross term is stored
-// once and mirrored, never doubled).  Classification runs an LDLT on Q and
-// probes increasing diagonal regularization:
-//   * Q clean at no regularization           -> CONVEX
-//   * Q singular but Q + k_clean*I clean     -> NUMERICALLY_UNCERTAIN (PSD)
-//   * Q still singular at Q + k_big*I        -> NONCONVEX (indefinite)
-//
-// The baseline LDLT clamps negative pivots to +singular_tol, so a naive
-// "any pivot < 0" check can never fire; the diagonal-regularization probe
-// recovers the sign information: a PSD matrix becomes clean as soon as a tiny
-// positive multiple of I is added, while an indefinite matrix stays singular
-// until the shift exceeds the magnitude of its most negative eigenvalue.
+// Detailed diagnostic report for convexity classification.
+struct ConvexityDiagnostics {
+    ConvexityClassification classification = ConvexityClassification::UNKNOWN;
+    double min_curvature = 0.0;       // minimum detected curvature / eigenvalue / pivot estimate
+    double convexity_tol = 1e-8;      // tolerance tau_PSD used for classification
+    double symmetry_error = 0.0;      // maximum asymmetry |Q_ij - Q_ji|
+    bool is_symmetric = true;         // whether symmetry error <= tau_sym
+    bool is_psd = true;               // whether matrix is strictly or numerically PSD
+    bool is_supported = true;         // whether model class is supported
+    std::string rejection_reason;     // descriptive diagnostic message if rejected
+};
+
+// Diagnoses the symmetric Hessian Q implied by `problem.quadratic_terms`.
+// Validates dimensions, verifies numerical symmetry against tau_sym,
+// symmetrizes within tolerance, and probes curvature against tau_PSD.
+ConvexityDiagnostics diagnose_qp_convexity(const model::Problem& problem,
+                                          const numerical::ToleranceConfig& tol);
+
+// Legacy classification interface, delegates to diagnose_qp_convexity.
 ConvexityClassification classify_qp_convexity(const model::Problem& problem,
                                               const numerical::ToleranceConfig& tol,
                                               double* min_pivot = nullptr);

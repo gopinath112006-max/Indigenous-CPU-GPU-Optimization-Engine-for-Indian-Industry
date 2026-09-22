@@ -47,6 +47,16 @@ BranchAndBoundResult BranchAndBoundSolver::solve(const model::Problem& problem) 
         return result;
     }
 
+    if (options_.qp_relaxation || problem.is_miqp()) {
+        auto diag = qp::diagnose_qp_convexity(problem, tol_);
+        if (diag.classification == qp::ConvexityClassification::NONCONVEX ||
+            diag.classification == qp::ConvexityClassification::ASYMMETRIC ||
+            diag.classification == qp::ConvexityClassification::CONVEX_OUTSIDE_SCOPE) {
+            result.status = model::ProblemStatus::NUMERICAL_ERROR;
+            return result;
+        }
+    }
+
     try {
         if (options_.threads < 2) {
             return solve_serial(problem, start_time);
@@ -726,7 +736,17 @@ std::vector<std::size_t> BranchAndBoundSolver::branch(const BnBNode& node, int v
     up_child.depth = node.depth + 1;
     up_child.bounds = node.bounds;
     up_child.bounds.push_back({static_cast<std::size_t>(var), ceil_val, true});
-    up_child.lower_bound = ceil_val;
+
+    // Children are queued unsolved, so their lower bound certifies nothing yet;
+    // inherit the parent's SOLVED relaxation bound, which remains valid for
+    // every tighter subproblem. (Previously the up child was stamped with the
+    // bare ceil_val of the branched variable, e.g. 1.0 on a binary, which leaked
+    // a bogus finite "bound" into the frontier and corrupted compute_best_bound()
+    // and the reported gap, e.g. best_bound = 1.0 on mas74.)
+    if (std::isfinite(node.lower_bound)) {
+        down_child.lower_bound = node.lower_bound;
+        up_child.lower_bound = node.lower_bound;
+    }
 
     if (!node.basis_var_status.empty()) {
         down_child.basis_var_status = node.basis_var_status;

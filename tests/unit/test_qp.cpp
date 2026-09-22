@@ -1534,3 +1534,276 @@ TEST(Phase1EdgeCases, RedundantConstraints) {
     EXPECT_NEAR(result.primal[1], 5.0, 1e-4);
 }
 
+// =============================================================================
+// Convexity Scope Specification Tests (11 Required Tests)
+// =============================================================================
+
+TEST(ConvexityScopeTest, Test1_PositiveDefiniteHessian) {
+    // 1. positive-definite Hessian -> accepted
+    // min x0^2 + x1^2 - 4*x0 - 2*x1, x in [0, 10]^2. Q = diag(2, 2) > 0.
+    ProblemBuilder builder("scope_pd");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, -2.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::CONVEX);
+    EXPECT_TRUE(diag.is_psd);
+    EXPECT_TRUE(diag.is_supported);
+    EXPECT_TRUE(diag.is_symmetric);
+    EXPECT_GT(diag.min_curvature, 0.0);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::CONVEX);
+    EXPECT_NEAR(ipm_r.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.objective_value, -5.0, 1e-4);
+
+    ActiveSetQPSolver as;
+    auto as_r = as.solve(prob);
+    EXPECT_EQ(as_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_EQ(as_r.convexity, ConvexityClassification::CONVEX);
+}
+
+TEST(ConvexityScopeTest, Test2_PositiveSemidefiniteSingular) {
+    // 2. positive-semidefinite singular Hessian -> accepted
+    // min x0^2 - 4*x0 + x1, x0 in [0, 5], x1 in [0, 5]. Q = diag(2, 0).
+    ProblemBuilder builder("scope_psd_singular");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, 1.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::NUMERICALLY_UNCERTAIN);
+    EXPECT_TRUE(diag.is_psd);
+    EXPECT_TRUE(diag.is_supported);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm_r.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 0.0, 1e-4);
+    EXPECT_NEAR(ipm_r.objective_value, -4.0, 1e-4);
+}
+
+TEST(ConvexityScopeTest, Test3_ZeroHessian) {
+    // 3. zero Hessian -> accepted (treated as linear objective)
+    // min 2*x0 + 3*x1, 1 <= x0, x1 <= 5.
+    ProblemBuilder builder("scope_zero_h");
+    builder.add_variable(1.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(1.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, 2.0}, {1, 3.0}}, ObjectiveSense::MINIMIZE);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::UNKNOWN);
+    EXPECT_TRUE(diag.is_psd);
+    EXPECT_TRUE(diag.is_supported);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm_r.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.objective_value, 5.0, 1e-4);
+}
+
+TEST(ConvexityScopeTest, Test4_ClearlyIndefiniteHessian) {
+    // 4. clearly indefinite Hessian -> rejected
+    // min x0^2 - x1^2, Q = diag(2, -2).
+    ProblemBuilder builder("scope_indef");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, -2.0);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::NONCONVEX);
+    EXPECT_FALSE(diag.is_psd);
+    EXPECT_FALSE(diag.is_supported);
+    EXPECT_LT(diag.min_curvature, -diag.convexity_tol);
+    EXPECT_FALSE(diag.rejection_reason.empty());
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::NONCONVEX);
+    EXPECT_FALSE(ipm_r.rejection_reason.empty());
+
+    ActiveSetQPSolver as;
+    auto as_r = as.solve(prob);
+    EXPECT_EQ(as_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(as_r.convexity, ConvexityClassification::NONCONVEX);
+}
+
+TEST(ConvexityScopeTest, Test5_NegativeDefiniteHessian) {
+    // 5. negative-definite Hessian -> rejected
+    // min -x0^2 - x1^2, Q = diag(-2, -2) < 0.
+    ProblemBuilder builder("scope_neg_def");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 0, -2.0);
+    builder.add_quadratic_term(1, 1, -2.0);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::NONCONVEX);
+    EXPECT_FALSE(diag.is_psd);
+    EXPECT_FALSE(diag.is_supported);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::NONCONVEX);
+}
+
+TEST(ConvexityScopeTest, Test6_NearlyPSDHessian) {
+    // 6. nearly-PSD Hessian within tolerance -> accepted/classified numerically PSD
+    // Q = diag(2.0, -1e-10) where -1e-10 >= -tau_PSD.
+    ProblemBuilder builder("scope_nearly_psd");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.0}, {1, 0.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, -1e-10);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::NUMERICALLY_UNCERTAIN);
+    EXPECT_TRUE(diag.is_psd);
+    EXPECT_TRUE(diag.is_supported);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm_r.primal[0], 2.0, 1e-4);
+}
+
+TEST(ConvexityScopeTest, Test7_MateriallyIndefiniteHessian) {
+    // 7. materially indefinite Hessian beyond tolerance -> rejected
+    // Q = diag(2.0, -1e-3) where -1e-3 < -tau_PSD.
+    ProblemBuilder builder("scope_materially_indef");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 5.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, -1e-3);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::NONCONVEX);
+    EXPECT_FALSE(diag.is_psd);
+    EXPECT_FALSE(diag.is_supported);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::NONCONVEX);
+}
+
+TEST(ConvexityScopeTest, Test8_SymmetricHessianPSD) {
+    // 8. symmetric Hessian -> accepted when PSD
+    // Explicit cross terms with Q_01 = 0.5 and Q_10 = 0.5 (perfectly symmetric).
+    // Total off-diagonal is 1.0; Q = [[2, 1], [1, 2]] has eigenvalues 3 and 1 (> 0).
+    ProblemBuilder builder("scope_sym_psd");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -3.0}, {1, -3.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    builder.add_quadratic_term(0, 1, 0.5);
+    builder.add_quadratic_term(1, 0, 0.5);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::CONVEX);
+    EXPECT_TRUE(diag.is_symmetric);
+    EXPECT_NEAR(diag.symmetry_error, 0.0, 1e-12);
+    EXPECT_TRUE(diag.is_psd);
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(ipm_r.primal[0], 1.0, 1e-4);
+    EXPECT_NEAR(ipm_r.primal[1], 1.0, 1e-4);
+}
+
+TEST(ConvexityScopeTest, Test9_SignificantlyAsymmetricHessian) {
+    // 9. significantly asymmetric Hessian -> rejected according to model policy
+    // Q_01 = 10.0, Q_10 = -10.0. Symmetry violation = 20.0 >> tau_sym.
+    ProblemBuilder builder("scope_asym");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    builder.add_quadratic_term(0, 1, 10.0);
+    builder.add_quadratic_term(1, 0, -10.0);
+    Problem prob = builder.build();
+
+    auto diag = diagnose_qp_convexity(prob, ToleranceConfig::industrial_defaults());
+    EXPECT_EQ(diag.classification, ConvexityClassification::ASYMMETRIC);
+    EXPECT_FALSE(diag.is_symmetric);
+    EXPECT_FALSE(diag.is_supported);
+    EXPECT_GT(diag.symmetry_error, 1.0);
+    EXPECT_FALSE(diag.rejection_reason.empty());
+
+    InteriorPointQPSolver ipm;
+    auto ipm_r = ipm.solve(prob);
+    EXPECT_EQ(ipm_r.status, ProblemStatus::NUMERICAL_ERROR);
+    EXPECT_EQ(ipm_r.convexity, ConvexityClassification::ASYMMETRIC);
+    EXPECT_FALSE(ipm_r.rejection_reason.empty());
+}
+
+TEST(ConvexityScopeTest, Test10_ConvexMIQP) {
+    // 10. convex MIQP -> accepted
+    // min (x0 - 2.3)^2 + (x1 - 1.5)^2, x0 integer >= 0, x1 continuous >= 0.
+    // Q = diag(2, 2) > 0.
+    ProblemBuilder builder("scope_convex_miqp");
+    builder.add_variable(0.0, 10.0, VarType::INTEGER, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.set_objective({{0, -4.6}, {1, -3.0}}, ObjectiveSense::MINIMIZE);
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, 2.0);
+    Problem prob = builder.build();
+    prob.obj_offset = 2.3 * 2.3 + 1.5 * 1.5;
+    EXPECT_TRUE(prob.is_miqp());
+
+    BranchAndBoundOptions opts;
+    opts.qp_relaxation = true;
+    opts.qp_relaxation_solver = QpRelaxationSolver::INTERIOR_POINT;
+    BranchAndBoundSolver bb(ToleranceConfig::industrial_defaults(), opts);
+    auto result = bb.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::OPTIMAL);
+    EXPECT_NEAR(result.primal[0], 2.0, 1e-4);
+    EXPECT_NEAR(result.primal[1], 1.5, 1e-4);
+}
+
+TEST(ConvexityScopeTest, Test11_NonConvexMIQP) {
+    // 11. non-convex MIQP -> rejected
+    // min x0^2 - 2*x1^2, x0 integer, x1 continuous.
+    // Indefinite quadratic objective: rejected at root node.
+    ProblemBuilder builder("scope_nonconvex_miqp");
+    builder.add_variable(0.0, 10.0, VarType::INTEGER, "x0");
+    builder.add_variable(0.0, 10.0, VarType::CONTINUOUS, "x1");
+    builder.add_quadratic_term(0, 0, 2.0);
+    builder.add_quadratic_term(1, 1, -4.0);
+    Problem prob = builder.build();
+    EXPECT_TRUE(prob.is_miqp());
+
+    BranchAndBoundOptions opts;
+    opts.qp_relaxation = true;
+    opts.qp_relaxation_solver = QpRelaxationSolver::INTERIOR_POINT;
+    BranchAndBoundSolver bb(ToleranceConfig::industrial_defaults(), opts);
+    auto result = bb.solve(prob);
+
+    EXPECT_EQ(result.status, ProblemStatus::NUMERICAL_ERROR);
+}
+

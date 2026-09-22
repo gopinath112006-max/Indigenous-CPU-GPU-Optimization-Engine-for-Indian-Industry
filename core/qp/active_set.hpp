@@ -34,8 +34,10 @@ struct ActiveSetResult {
     std::vector<int> active_set;
     std::size_t iterations = 0;
     double solve_time_ms = 0.0;
-    // Convexity of the (minimized) Hessian.
+    // Convexity of the (minimized) Hessian and detailed diagnostics.
     ConvexityClassification convexity = ConvexityClassification::UNKNOWN;
+    ConvexityDiagnostics convexity_diagnostics;
+    std::string rejection_reason;
     // Total iterative-refinement correction sweeps across all KKT solves.
     std::size_t refinement_sweeps = 0;
 };
