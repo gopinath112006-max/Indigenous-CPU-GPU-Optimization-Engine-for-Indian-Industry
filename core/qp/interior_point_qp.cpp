@@ -7,6 +7,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <numeric>
+#include <utility>
 
 namespace hypernova::qp {
 
@@ -57,6 +58,52 @@ InteriorPointQPResult InteriorPointQPSolver::solve(const model::Problem& problem
         if (var.lower_bound > var.upper_bound + tol_.feasibility_tol()) {
             result.status = model::ProblemStatus::INFEASIBLE;
             return result;
+        }
+    }
+
+    // Fixed variables (lb == ub) cannot pass through the bound barrier: at a
+    // feasible iterate both bound slacks (x - lb) and (ub - x) are zero, so
+    // the KKT barrier-complementarity block gets a structural zero on the
+    // diagonal and stays singular no matter how the regularization is raised.
+    // Model each fixed variable as a free variable pinned by an explicit
+    // equality row instead: the binding multiplier becomes a free-signed
+    // equality dual and the barrier never sees a zero slack column.
+    {
+        std::vector<std::pair<std::size_t, double>> pins;
+        for (std::size_t j = 0; j < minimized.variables.size(); ++j) {
+            const auto& v = minimized.variables[j];
+            if (v.lower_bound > -INF && v.upper_bound < INF &&
+                v.upper_bound - v.lower_bound <= tol_.feasibility_tol()) {
+                pins.emplace_back(j, v.lower_bound);
+            }
+        }
+        if (!pins.empty()) {
+            const auto& A = minimized.constraint_matrix;
+            std::vector<numerical::Triplet> triplets;
+            triplets.reserve(A.nnz() + pins.size());
+            for (std::size_t i = 0; i < minimized.constraints.size(); ++i) {
+                for (std::size_t t = A.row_ptr()[i]; t < A.row_ptr()[i + 1]; ++t) {
+                    triplets.emplace_back(i, A.col_indices()[t], A.values()[t]);
+                }
+            }
+            for (const auto& pin : pins) {
+                const std::size_t j = pin.first;
+                const double value = pin.second;
+                const std::size_t i = minimized.constraints.size();
+                model::Constraint con;
+                con.index = i;
+                con.sense = model::ConstraintSense::EQ;
+                con.rhs = value;
+                con.name = "fixed_x" + std::to_string(j);
+                minimized.constraints.push_back(con);
+                triplets.emplace_back(i, j, 1.0);
+                minimized.variables[j].lower_bound = -INF;
+                minimized.variables[j].upper_bound = INF;
+            }
+            minimized.constraint_matrix =
+                numerical::SparseMatrix::from_triplets(minimized.constraints.size(),
+                                                       minimized.variables.size(),
+                                                       triplets);
         }
     }
 
