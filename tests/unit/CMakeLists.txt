@@ -110,3 +110,9 @@ add_executable(test_randomized
 )
 target_link_libraries(test_randomized PRIVATE hypernova_api hypernova_milp hypernova_model)
 setup_test_target(test_randomized)
+
+add_executable(test_bound_shifting
+    test_bound_shifting.cpp
+)
+target_link_libraries(test_bound_shifting PRIVATE hypernova_api hypernova_milp hypernova_model)
+setup_test_target(test_bound_shifting)
