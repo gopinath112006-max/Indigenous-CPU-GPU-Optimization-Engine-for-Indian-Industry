@@ -413,6 +413,9 @@ void BranchAndBoundSolver::process_node(BnBNode& node, const model::Problem& pro
 bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& problem) {
     model::ProblemBuilder builder;
 
+    std::vector<double> lp_shifts(problem.variables.size(), 0.0);
+    double obj_offset = 0.0;
+
     for (std::size_t j = 0; j < problem.variables.size(); ++j) {
         const auto& var = problem.variables[j];
         double lb = var.lower_bound;
@@ -426,26 +429,52 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
                 }
             }
         }
-        builder.add_variable(lb, ub, var.type, var.name);
+        if (!options_.qp_relaxation) {
+            if (lb != -std::numeric_limits<double>::infinity()) {
+                lp_shifts[j] = lb;
+                if (std::isfinite(ub)) ub -= lb;
+                lb = 0.0;
+            }
+            builder.add_variable(lb, ub, var.type, var.name);
+            obj_offset += var.objective_coeff * lp_shifts[j];
+        } else {
+            builder.add_variable(lb, ub, var.type, var.name);
+        }
     }
 
     for (const auto& con : problem.constraints) {
         std::vector<std::pair<std::size_t, double>> coeffs;
         const auto& A = problem.constraint_matrix;
+        double shift_sum = 0.0;
         if (A.order() == model::StorageOrder::CSR) {
             for (std::size_t k = A.row_ptr()[con.index]; k < A.row_ptr()[con.index + 1]; ++k) {
                 coeffs.push_back({A.col_indices()[k], A.values()[k]});
+                if (!options_.qp_relaxation) {
+                    shift_sum += A.values()[k] * lp_shifts[A.col_indices()[k]];
+                }
             }
         }
-        builder.add_constraint(coeffs, con.sense, con.rhs, con.name);
+        builder.add_constraint(coeffs, con.sense, con.rhs - shift_sum, con.name);
     }
 
     for (const auto& cut : cut_pool_.get_active_cuts()) {
-        builder.add_constraint(cut.coefficients, cut.sense, cut.rhs, cut.name);
+        double shift_sum = 0.0;
+        if (!options_.qp_relaxation) {
+            for (const auto& term : cut.coefficients) {
+                shift_sum += term.second * lp_shifts[term.first];
+            }
+        }
+        builder.add_constraint(cut.coefficients, cut.sense, cut.rhs - shift_sum, cut.name);
     }
 
     for (std::size_t k = 0; k < symmetry_rows_.size(); ++k) {
-        builder.add_constraint(symmetry_rows_[k], model::ConstraintSense::GE, 0.0,
+        double shift_sum = 0.0;
+        if (!options_.qp_relaxation) {
+            for (const auto& term : symmetry_rows_[k]) {
+                shift_sum += term.second * lp_shifts[term.first];
+            }
+        }
+        builder.add_constraint(symmetry_rows_[k], model::ConstraintSense::GE, 0.0 - shift_sum,
                                symmetry_row_names_[k]);
     }
 
@@ -531,12 +560,39 @@ bool BranchAndBoundSolver::solve_node_lp(BnBNode& node, const model::Problem& pr
         relax_status = lp_result.status;
         relax_primal = std::move(lp_result.primal);
         relax_reduced_costs = std::move(lp_result.reduced_costs);
-        relax_objective = lp_result.objective_value;
+        relax_objective = lp_result.objective_value + obj_offset;
+        for (std::size_t j = 0; j < relax_primal.size(); ++j) {
+            relax_primal[j] += lp_shifts[j];
+        }
         node.basis_var_status = std::move(lp_result.basis_status);
     }
 
     if (relax_status == model::ProblemStatus::OPTIMAL ||
         relax_status == model::ProblemStatus::SUBOPTIMAL) {
+        
+        bool bounds_satisfied = true;
+        for (std::size_t j = 0; j < problem.variables.size(); ++j) {
+            double v = relax_primal[j];
+            double lb = problem.variables[j].lower_bound;
+            double ub = problem.variables[j].upper_bound;
+            for (const auto& bc : node.bounds) {
+                if (bc.var == j) {
+                    if (bc.is_lower && bc.value > lb) lb = bc.value;
+                    if (!bc.is_lower && bc.value < ub) ub = bc.value;
+                }
+            }
+            if (v < lb - tol_.feasibility_tol() || v > ub + tol_.feasibility_tol()) {
+                bounds_satisfied = false;
+                break;
+            }
+        }
+
+        if (!bounds_satisfied) {
+            node.status = model::ProblemStatus::NUMERICAL_ERROR;
+            node.pruned = true;
+            return false;
+        }
+
         node.lp_solution = std::move(relax_primal);
         node.lower_bound = relax_objective;
         if (problem.obj_sense == model::ObjectiveSense::MAXIMIZE) {
@@ -749,12 +805,20 @@ std::vector<std::size_t> BranchAndBoundSolver::branch(const BnBNode& node, int v
         up_child.lower_bound = node.lower_bound;
     }
 
-    if (!node.basis_var_status.empty()) {
-        down_child.basis_var_status = node.basis_var_status;
-        down_child.basis_con_status = node.basis_con_status;
-        up_child.basis_var_status = node.basis_var_status;
-        up_child.basis_con_status = node.basis_con_status;
-    }
+    // Do NOT propagate the parent basis to child nodes.
+    //
+    // The parent's LP basis has the branching variable basic at a fractional
+    // value (e.g. x0 = 1.5).  In the child, that variable's bound is tightened
+    // to floor(val) or ceil(val), making the inherited basis primal-infeasible.
+    // The primal simplex launched with a warm start checks reduced costs
+    // (dual feasibility) before primal feasibility and can declare the point
+    // OPTIMAL without detecting that x0 = 1.5 now violates x0 ≤ 1 (or x0 ≥ 2).
+    // Every child LP then returns the same fractional solution, no node is ever
+    // pruned, and the B&B tree grows without bound.
+    //
+    // Always solve child nodes from scratch via Phase I.  The performance cost
+    // is negligible for the small sub-problems that arise in practice and is far
+    // outweighed by the correctness guarantee.
 
     const std::size_t down_idx = nodes_.size();
     const std::size_t up_idx = nodes_.size() + 1;
