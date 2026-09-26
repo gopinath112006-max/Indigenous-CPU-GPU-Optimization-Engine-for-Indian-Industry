@@ -861,3 +861,38 @@ TEST(BranchAndBoundTest, SmallIndependentModels) {
                     r.status == ProblemStatus::UNKNOWN);
     }
 }
+
+TEST(SymmetryBug, ExcludesOptimum) {
+    hypernova::model::ProblemBuilder builder("symmetry_lp");
+    builder.add_variable(0.0, 1.0, hypernova::model::VarType::INTEGER, "x1");
+    builder.add_variable(0.0, 1.0, hypernova::model::VarType::INTEGER, "x2");
+    
+    // c1: x1 + x2 <= 1
+    builder.add_constraint({{0, 1.0}, {1, 1.0}}, hypernova::model::ConstraintSense::LE, 1.0, "c1");
+    
+    // obj: 1.0 x1 + (1.0 + 1e-10) x2 -> MAXIMIZE
+    builder.set_objective({{0, 1.0}, {1, 1.0000000001}}, hypernova::model::ObjectiveSense::MAXIMIZE);
+
+    hypernova::model::Problem prob = builder.build();
+    hypernova::numerical::ToleranceConfig tol;
+    tol.feasibility_tol(1e-12); // Strict feasibility
+    tol.optimality_tol(1e-12);
+
+    hypernova::milp::BranchAndBoundOptions opts;
+    opts.symmetry_breaking = true;
+    opts.heuristics.rounding = false;
+    opts.heuristics.diving = false;
+    opts.heuristics.feasibility_pump = false;
+    opts.heuristics.rins = false;
+    
+    hypernova::milp::BranchAndBoundSolver solver(tol, opts);
+    auto res = solver.solve(prob);
+    
+    std::cout << "\nSymmetry Test\n";
+    std::cout << "Status: " << (int)res.status << "\n";
+    std::cout << "Objective: " << std::setprecision(15) << res.objective_value << "\n";
+    if (res.primal.size() >= 2) {
+        std::cout << "x1 = " << res.primal[0] << ", x2 = " << res.primal[1] << "\n";
+    }
+    EXPECT_NEAR(res.objective_value, 1.0000000001, 1e-12);
+}

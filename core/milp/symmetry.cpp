@@ -13,9 +13,9 @@ struct VariableSignature {
     double obj = 0.0;
     std::vector<std::pair<std::size_t, double>> column; // sorted by row
 
-    bool operator==(const VariableSignature& o) const {
-        if (type != o.type || std::abs(lb - o.lb) > 1e-9 || std::abs(ub - o.ub) > 1e-9) return false;
-        if (std::abs(obj - o.obj) > 1e-9) return false;
+    bool is_symmetric(const VariableSignature& o, double feas_tol, double opt_tol) const {
+        if (type != o.type || std::abs(lb - o.lb) > feas_tol || std::abs(ub - o.ub) > feas_tol) return false;
+        if (std::abs(obj - o.obj) > opt_tol) return false;
         if (column.size() != o.column.size()) return false;
         for (std::size_t k = 0; k < column.size(); ++k) {
             if (column[k].first != o.column[k].first) return false;
@@ -72,7 +72,7 @@ SymmetryDetection SymmetryDetector::detect(const model::Problem& problem) const 
             if (in_quadratic[b]) continue;
             if (sigs[b].column.empty()) continue;
             if (assigned[b] != n) continue;
-            if (sigs[a] == sigs[b]) {
+            if (sigs[a].is_symmetric(sigs[b], tol_.feasibility_tol(), tol_.optimality_tol())) {
                 group.push_back(b);
                 assigned[b] = a;
             }

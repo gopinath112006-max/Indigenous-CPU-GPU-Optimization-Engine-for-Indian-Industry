@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <hypernova/api.hpp>
 #include <limits>
+#include <milp/branch_and_bound.hpp>
 
 using namespace hypernova;
 
@@ -312,4 +313,101 @@ TEST(APITest, OptionWiringVerification) {
     EXPECT_EQ(solver.options().node_limit, 5u);
     EXPECT_EQ(solver.options().solution_limit, 1u);
     EXPECT_TRUE(solver.options().use_gpu);
+}
+TEST(APITest, SimplexToleranceFailureReproducer) {
+    using namespace hypernova;
+    model::ProblemBuilder builder("simplex_repro");
+    auto x = builder.add_variable(0.0, 10.0, model::VarType::CONTINUOUS, "x");
+    builder.add_constraint({{x, 1.0}}, model::ConstraintSense::LE, 0.0, "c1");
+    builder.add_constraint({{x, 1.0}}, model::ConstraintSense::GE, 1e-10, "c2");
+    builder.set_objective({{x, 1.0}}, model::ObjectiveSense::MINIMIZE);
+    model::Problem prob = builder.build();
+
+    SolverOptions opts;
+    opts.engine = EngineType::PRIMAL_SIMPLEX;
+    opts.presolve = PresolveLevel::OFF;
+    opts.tolerances.feasibility_tol(1e-12); // Request strict feasibility
+    Solver solver;
+    solver.set_options(opts);
+    
+    // Call Simplex directly to see its raw status
+    std::vector<int> vs, cs;
+    lp::SimplexOptions sopts;
+    lp::SimplexSolver simp(opts.tolerances, sopts);
+    auto raw_res = simp.solve_with_basis(prob, vs, cs);
+    std::cout << "\n--- RAW SIMPLEX STATUS ---\n";
+    std::cout << "Status: " << (int)raw_res.status << " (1=OPTIMAL, 2=INFEASIBLE)\n";
+    std::cout << "--------------------------\n";
+
+    auto result = solver.solve(prob);
+    std::cout << "\n--- API RESULT ---\n";
+    std::cout << "Status: " << (int)result.status << " (1=OPTIMAL, 2=INFEASIBLE)\n";
+    std::cout << "-------------------------\n";
+    
+    EXPECT_EQ(raw_res.status, model::ProblemStatus::INFEASIBLE);
+}
+TEST(APITest, SymmetryBugReproducer) {
+    using namespace hypernova;
+    model::ProblemBuilder builder("sym_bug");
+    auto x1 = builder.add_variable(0.0, 1.0, model::VarType::BINARY, "x1");
+    auto x2 = builder.add_variable(0.0, 1.0, model::VarType::BINARY, "x2");
+    
+    // Constraint: x1 + x2 >= 1
+    builder.add_constraint({{x1, 1.0}, {x2, 1.0}}, model::ConstraintSense::GE, 1.0, "c1");
+    
+    // Obj: minimize (1 + 1e-10) * x1 + 1.0 * x2
+    // True optimum: x1=0, x2=1 (obj = 1.0)
+    builder.set_objective({{x1, 1.0 + 1e-10}, {x2, 1.0}}, model::ObjectiveSense::MINIMIZE);
+    
+    model::Problem prob = builder.build();
+
+    SolverOptions opts;
+    opts.engine = EngineType::BRANCH_AND_CUT;
+    opts.tolerances.feasibility_tol(1e-12); // strict tolerance
+    opts.tolerances.optimality_tol(1e-12);
+    
+    Solver solver;
+    solver.set_options(opts);
+    auto result = solver.solve(prob);
+    
+    std::cout << "\n--- SYMMETRY REPRODUCER RESULT ---\n";
+    std::cout << "Obj: " << std::setprecision(15) << result.objective_value << "\n";
+    std::cout << "x1: " << result.primal[x1] << ", x2: " << result.primal[x2] << "\n";
+    std::cout << "-------------------------\n";
+    
+    // The true optimum is 1.0. If symmetry breaker cut off x1=0, x2=1, the obj will be 1 + 1e-10.
+    EXPECT_NEAR(result.objective_value, 1.0, 1e-11);
+}
+TEST(APITest, SymmetryBugReproducerForced) {
+    using namespace hypernova;
+    model::ProblemBuilder builder("sym_bug");
+    auto x1 = builder.add_variable(0.0, 1.0, model::VarType::BINARY, "x1");
+    auto x2 = builder.add_variable(0.0, 1.0, model::VarType::BINARY, "x2");
+    
+    // Constraint: x1 + x2 >= 1
+    builder.add_constraint({{x1, 1.0}, {x2, 1.0}}, model::ConstraintSense::GE, 1.0, "c1");
+    
+    // Obj: minimize (1 + 1e-10) * x1 + 1.0 * x2
+    // True optimum: x1=0, x2=1 (obj = 1.0)
+    builder.set_objective({{x1, 1.0 + 1e-10}, {x2, 1.0}}, model::ObjectiveSense::MINIMIZE);
+    
+    model::Problem prob = builder.build();
+
+    milp::BranchAndBoundOptions opts;
+    opts.symmetry_breaking = true; // FORCE SYMMETRY
+    
+    numerical::ToleranceConfig tol;
+    tol.feasibility_tol(1e-12);
+    tol.optimality_tol(1e-12);
+    
+    milp::BranchAndBoundSolver bb(tol, opts);
+    auto result = bb.solve(prob);
+    
+    std::cout << "\n--- SYMMETRY REPRODUCER FORCED RESULT ---\n";
+    std::cout << "Obj: " << std::setprecision(15) << result.objective_value << "\n";
+    std::cout << "Nodes explored: " << result.nodes_explored << "\n";
+    std::cout << "x1: " << result.primal[x1] << ", x2: " << result.primal[x2] << "\n";
+    std::cout << "-------------------------\n";
+    
+    EXPECT_NEAR(result.objective_value, 1.0, 1e-11);
 }

@@ -654,3 +654,54 @@ TEST(SimplexTest, TableauRowExtraction) {
     EXPECT_NEAR(tableau_row[x1], 1.0, 1e-6);
     EXPECT_NEAR(tableau_row[x2], 0.0, 1e-6);
 }
+
+TEST(Phase1Bug, ToleranceBypass) {
+    hypernova::model::ProblemBuilder builder("infeasible_lp");
+    builder.add_variable(0.0, 1.0, hypernova::model::VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}}, hypernova::model::ConstraintSense::GE, 1.0000000001, "c1");
+    builder.set_objective({{0, 1.0}}, hypernova::model::ObjectiveSense::MINIMIZE);
+
+    hypernova::model::Problem prob = builder.build();
+    hypernova::numerical::ToleranceConfig tol;
+    tol.feasibility_tol(1e-12); // Request strict feasibility
+
+    hypernova::lp::SimplexOptions opts;
+    hypernova::lp::SimplexSolver solver(tol, opts);
+    
+    std::vector<int> var_stat, con_stat;
+    auto res = solver.solve_with_basis(prob, var_stat, con_stat);
+    
+    std::cout << "\nPhase 1 Test\n";
+    std::cout << "Status: " << (int)res.status << "\n";
+    std::cout << "Objective: " << std::setprecision(15) << res.objective_value << "\n";
+    if (!res.primal.empty()) {
+        std::cout << "x1 = " << std::setprecision(15) << res.primal[0] << "\n";
+        std::cout << "Violation of c1: " << std::setprecision(15) << (1.0000000001 - res.primal[0]) << "\n";
+    }
+}
+
+TEST(Phase1Bug, DualToleranceBypass) {
+    hypernova::model::ProblemBuilder builder("infeasible_lp");
+    builder.add_variable(0.0, 1.0, hypernova::model::VarType::CONTINUOUS, "x1");
+    builder.add_constraint({{0, 1.0}}, hypernova::model::ConstraintSense::GE, 1.0000000001, "c1");
+    builder.set_objective({{0, 1.0}}, hypernova::model::ObjectiveSense::MINIMIZE);
+
+    hypernova::model::Problem prob = builder.build();
+    hypernova::numerical::ToleranceConfig tol;
+    tol.feasibility_tol(1e-12); // Request strict feasibility
+
+    hypernova::lp::SimplexOptions opts;
+    opts.algorithm = hypernova::lp::SimplexAlgorithm::DUAL;
+    hypernova::lp::SimplexSolver solver(tol, opts);
+    
+    std::vector<int> var_stat, con_stat;
+    auto res = solver.solve_with_basis(prob, var_stat, con_stat);
+    
+    std::cout << "\nDual Simplex Test\n";
+    std::cout << "Status: " << (int)res.status << "\n";
+    std::cout << "Objective: " << std::setprecision(15) << res.objective_value << "\n";
+    if (!res.primal.empty()) {
+        std::cout << "x1 = " << std::setprecision(15) << res.primal[0] << "\n";
+        std::cout << "Violation of c1: " << std::setprecision(15) << (1.0000000001 - res.primal[0]) << "\n";
+    }
+}
