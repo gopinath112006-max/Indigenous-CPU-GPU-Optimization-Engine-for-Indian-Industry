@@ -15,7 +15,8 @@ struct VariableSignature {
 
     bool is_symmetric(const VariableSignature& o, double feas_tol, double opt_tol) const {
         if (type != o.type || std::abs(lb - o.lb) > feas_tol || std::abs(ub - o.ub) > feas_tol) return false;
-        if (std::abs(obj - o.obj) > opt_tol) return false;
+        double range = std::max(1.0, std::abs(ub - lb));
+        if (std::abs(obj - o.obj) > opt_tol / range) return false;
         if (column.size() != o.column.size()) return false;
         for (std::size_t k = 0; k < column.size(); ++k) {
             if (column[k].first != o.column[k].first) return false;
