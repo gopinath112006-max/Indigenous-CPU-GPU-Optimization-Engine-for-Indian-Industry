@@ -23,5 +23,5 @@
 *   **Talking Point:** "Targeted verification passes flawlessly. Note: Full Netlib regression remains an explicitly documented limitation due to CI environment timeouts, but structural correctness is verified."
 
 ## 5. Q&A Transition (1 min)
-*   **Wrap-up:** "HyperNova's core is mathematically sound and ready for targeted integration."
+*   **Wrap-up:** "HyperNova's targeted integrations have been verified, and the core solver framework is ready for continued development."
 *   **Action:** Leave the terminal showing "100% tests passed, 0 tests failed out of 3" (for the targeted suites) as the backdrop for evaluator Q&A.

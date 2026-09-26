@@ -29,7 +29,7 @@
 ## Slide 6: Targeted Regression Testing
 *   Instead of just running it, we built a 10-case GTest regression suite specifically for bound transformations.
 *   **Cases Covered:** Mixed integer variables, infeasible bounds, positive/negative bounds, maximization/minimization.
-*   **Status:** Targeted regression verification: 3/3 LP, MILP, and API test suites passed. The solver is mathematically robust.
+*   **Status:** Targeted regression verification: 3/3 LP, MILP, and API test suites passed, including the identified symmetry and tolerance regression cases.
 
 ## Slide 7: Current Freeze Status
 *   **Verification:** Targeted verification is complete and structurally sound.
