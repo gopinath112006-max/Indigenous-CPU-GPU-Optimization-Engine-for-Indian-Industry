@@ -34,22 +34,19 @@ The fix was implemented cleanly inside `core/milp/branch_and_bound.cpp`, isolati
 3. **Inverse Transformation:** Add $lp\_shifts[j]$ back to the resulting $relax\_primal$ vector and $obj\_offset$ to the objective.
 
 ## 5. Regression Testing
-To guarantee the fix mathematically, we authored targeted regression tests (`tests/unit/test_bound_shifting.cpp`) forcing the B&B engine to execute the logic across 10 critical edge boundaries:
-- Case 1: Positive lower bound
-- Case 2: Negative lower bound
-- Case 3: Shifted lower and upper bounds
-- Case 4: Fixed variable bounds ($lb = ub$)
-- Case 5: Shifted integer variable bounds
-- Case 6: Multiple shifted variables
-- Case 7: Mixed shifted and unshifted variables
-- Case 8: Complex Minimization
-- Case 9: Complex Maximization
-- Case 10: Infeasible shifted bounds
+To guarantee the structural soundness of our fixes, we verified targeted integration tests across the critical components:
+- **LP, MILP, and API suites:** 3/3 test suites passed.
+- **Symmetry correctness:** `SymmetryBug.ExcludesOptimum` is verified.
+- **Simplex tolerances:** `SimplexToleranceFailureReproducer` is verified.
+- **Tolerance Propagation:** The CLI and API strictly apply user-defined tolerances.
 
-**Result:** `10/10` targeted regression tests passed smoothly with precise original feasibility matched.
+**Result:** Targeted regression verification passed smoothly with precise original feasibility matched.
 
-## 6. System Verification
-The full 22-test CTest suite (including the rigorous Netlib tests) verified that the entire product is functionally stable and regression-free.
+## 6. System Verification (Documented Limitations)
+* **Verified:** Targeted structural logic, unit tests, and API pathways.
+* **Not fully verified / Incomplete:** The exhaustive 22-test CTest suite (including the rigorous Netlib tests). 
+
+**Reason:** The large Netlib Phase-I cases require impractical sequential execution time in the current verification environment, leading to timeouts. Exhaustive regression verification remains an explicitly documented limitation.
 
 ---
-**Verdict:** The codebase is officially frozen with zero structural regressions.
+**Verdict:** The codebase is officially frozen with verified targeted correctness and disclosed limitations.

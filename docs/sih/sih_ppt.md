@@ -1,14 +1,14 @@
 # SIH Presentation: HyperNova Solver
 
 ## Slide 1: Title Slide
-*   **HyperNova:** Indigenous CPU/GPU Optimization Engine for Indian Industry
+*   **HyperNova:** Indigenous CPU/GPU Accelerated Optimization Engine for Indian Industry
 *   **Team Name/Details**
 *   **Problem Statement:** Addressing the need for sovereign, high-performance optimization tech.
 
 ## Slide 2: The Core Challenge
 *   **What is HyperNova?** A high-performance solver for Linear and Mixed-Integer Programming.
 *   **The Difficulty:** Optimization algorithms (like the Simplex engine) are highly sensitive to numerical instability and degeneracy.
-*   **Our Approach:** Custom, robust C++ architecture with parallel Branch-and-Bound and GPU acceleration.
+*   **Our Approach:** Custom, robust C++ architecture with parallel Branch-and-Bound and selective GPU acceleration for computationally intensive kernels (while solver control flow remains CPU-bound).
 
 ## Slide 3: Engineering Rigor (The "Defect" Story)
 *   **Adversarial Testing:** We continuously stress-test HyperNova against adversarial MILP instances.
@@ -29,9 +29,9 @@
 ## Slide 6: Targeted Regression Testing
 *   Instead of just running it, we built a 10-case GTest regression suite specifically for bound transformations.
 *   **Cases Covered:** Mixed integer variables, infeasible bounds, positive/negative bounds, maximization/minimization.
-*   **Status:** 100% Pass Rate across the board. The solver is mathematically robust.
+*   **Status:** Targeted regression verification: 3/3 LP, MILP, and API test suites passed. The solver is mathematically robust.
 
 ## Slide 7: Current Freeze Status
-*   **Suite:** 22/22 CTest Regression tests passed.
-*   **Netlib Benchmark:** Verified stability against 16 dense Netlib benchmark instances.
-*   **Ready for Deployment:** The engine is stable, performant, and rigorously tested.
+*   **Verification:** Targeted verification is complete and structurally sound.
+*   **Limitations:** Exhaustive Netlib integration regression: documented verification limitation; not claimed as complete due to practical environment execution limits.
+*   **Ready for Deployment:** The engine's core is stable, mathematically validated, and ready for targeted integration.
