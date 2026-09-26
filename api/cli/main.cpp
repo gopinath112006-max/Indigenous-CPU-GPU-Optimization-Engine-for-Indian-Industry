@@ -308,7 +308,7 @@ int cmd_solve(int argc, char** argv) {
         }
         std::cout << "Time: " << elapsed << " ms\n";
 
-        validation::SolutionVerifier verifier;
+        validation::SolutionVerifier verifier(options.tolerances);
         validation::VerificationResult verification;
         if (solution.is_feasible()) {
             verification = verifier.verify_detailed(problem, to_model_solution(solution));
