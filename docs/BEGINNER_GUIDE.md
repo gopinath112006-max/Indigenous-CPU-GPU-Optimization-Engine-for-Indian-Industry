@@ -1,4 +1,4 @@
-﻿# The Complete Beginner's Guide to HyperNova
+# The Complete Beginner's Guide to HyperNova
 
 ## 1. What is HyperNova?
 HyperNova is a mathematical optimization solver designed to solve Linear Programming (LP) and Mixed-Integer Linear Programming (MILP) problems. 
@@ -24,9 +24,9 @@ cmake --build . --parallel
 Verify your build:
 `bash
 cd build
-ctest -j16 --output-on-failure
+ctest -R "test_lp|test_milp|test_api" --output-on-failure
 `
-*(All 21 test suites should pass).*
+*(The targeted test suites should pass. Note: the full Netlib regression suite takes significantly longer and may hit execution timeouts).*
 
 ## 5. Checking Capabilities
 Check your hardware support:

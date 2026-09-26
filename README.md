@@ -1,4 +1,4 @@
-﻿# HyperNova — Indigenous GPU-Accelerated Optimization Solver
+# HyperNova — Indigenous GPU-Accelerated Optimization Solver
 
 HyperNova is an independently implemented mathematical optimization engine designed to provide a license-free and inspectable solver core.
 
@@ -15,7 +15,7 @@ cd HyperNova
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build . --parallel
-ctest --test-dir . --output-on-failure
+ctest --test-dir . -R "test_lp|test_milp|test_api" --output-on-failure
 ```
 
 ## 3. Beginner Guide

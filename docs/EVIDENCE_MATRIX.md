@@ -10,4 +10,5 @@
 | REST solve     | console/server.py | HTTP request to /api/v1/solve | PASS |
 | C++ API        | pi.hpp        | Compiled asic_solver.cpp against hypernova_api | PASS |
 | GPU capability | gpu_backend.cpp| hypernova.exe capabilities reports cuda | PASS |
-| Tests          | 	ests/         | ctest -N and ctest | PASS (21 suites) |
+| Targeted Tests | tests/ | ctest -R "test_lp|test_milp|test_api" | PASS (3 targeted suites) |
+| Exhaustive Reg. | tests/regression | ctest (Full execution) | INCOMPLETE (Execution limits) |
